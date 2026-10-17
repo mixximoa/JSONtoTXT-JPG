@@ -206,21 +206,23 @@ function processGeoJSON(data) {
         ctx.fillText(String(idx + 1), tx, ty);
     });
 
-    currentJpgBase64 = canvas.toDataURL("image/jpeg", 0.95);
+    // Формуємо правильний заголовок df:filename для JPG
+    const rawJpgBase64 = canvas.toDataURL("image/jpeg", 0.95).split(',')[1];
+    currentJpgBase64 = `df:${currentBaseName}.jpg;data:image/jpg;base64,` + rawJpgBase64;
+
     canvas.style.display = "block";
     document.getElementById('actionButtons').style.display = "block";
-
-    // Автоматично записуємо в папку Download, якщо плагін файлової системи активний
-    saveToDownloadsFolder();
+    statusEl.innerText = `✅ Створено: ${currentBaseName}.txt та .jpg!`;
 }
 
 function utf8ToBase64(str) {
     return window.btoa(unescape(encodeURIComponent(str)));
 }
 
-// Збереження або передача через системне меню Android
+// Префікс df:ім'я_файлу.txt;data:text/txt;base64,... у cordova-plugin-x-socialsharing
+// примусово задає і точне ім'я файлу (кадастровий номер), і розширення .txt!
 document.getElementById('shareBothBtn').onclick = function() {
-    const txtDataUrl = "data:text/plain;base64," + utf8ToBase64(currentTxtContent);
+    const txtDataUrl = `df:${currentBaseName}.txt;data:text/txt;base64,` + utf8ToBase64(currentTxtContent);
     if (window.plugins && window.plugins.socialsharing) {
         window.plugins.socialsharing.shareWithOptions({
             subject: currentBaseName,
@@ -232,7 +234,7 @@ document.getElementById('shareBothBtn').onclick = function() {
 };
 
 document.getElementById('shareTxtBtn').onclick = function() {
-    const txtDataUrl = "data:text/plain;base64," + utf8ToBase64(currentTxtContent);
+    const txtDataUrl = `df:${currentBaseName}.txt;data:text/txt;base64,` + utf8ToBase64(currentTxtContent);
     if (window.plugins && window.plugins.socialsharing) {
         window.plugins.socialsharing.shareWithOptions({
             subject: currentBaseName + ".txt",
@@ -250,12 +252,7 @@ document.getElementById('copyTxtBtn').onclick = function() {
     statusEl.innerText = "✅ Координати скопійовано в буфер обміну!";
 };
 
-function saveToDownloadsFolder() {
-    statusEl.innerText = `✅ Створено: ${currentBaseName}.txt та .jpg!\nНатисніть зелену кнопку нижче, щоб зберегти або передати на ровер.`;
-}
-
 function fallbackShare() {
-    // Якщо запущено просто в браузері Chrome
     const blob = new Blob([currentTxtContent], { type: "text/plain;charset=utf-8" });
     const a = document.createElement("a");
     a.href = URL.createObjectURL(blob);
