@@ -19,16 +19,18 @@ jobs:
         with:
           node-version: '20'
 
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
-
-      - name: Build WebAPK with Cordova
+      - name: Accept Android Licenses & Build APK
+        env:
+          ANDROID_HOME: /usr/local/lib/android/sdk
+          ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
         run: |
+          yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses || true
+          $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager "platforms;android-34" "build-tools;34.0.0"
           npm install -g cordova
           cordova create app org.geodesy.cadastre CadastreRTK
           cp index.html app/www/index.html
           cd app
-          cordova platform add android
+          cordova platform add android@13.0.0
           cordova build android --debug
 
       - name: Upload Ready APK
