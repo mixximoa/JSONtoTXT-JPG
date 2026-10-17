@@ -17,45 +17,61 @@
             background: white;
             max-width: 500px;
             margin: 0 auto;
-            padding: 20px;
+            padding: 18px;
             border-radius: 14px;
             box-shadow: 0 4px 15px rgba(0,0,0,0.08);
         }
-        h2 { margin-top: 0; font-size: 20px; color: #14213d; }
+        h2 { margin-top: 0; font-size: 19px; color: #14213d; }
         .btn {
             display: block;
             width: 100%;
             box-sizing: border-box;
             padding: 14px;
             margin: 10px 0;
-            font-size: 16px;
+            font-size: 15px;
             font-weight: bold;
             color: white;
             background: #1d6fa5;
             border: none;
             border-radius: 8px;
             cursor: pointer;
-            text-decoration: none;
         }
+        .btn:active { opacity: 0.8; }
         .btn-green { background: #2a9d8f; }
         .btn-dark { background: #14213d; }
+        .btn-orange { background: #e76f51; }
         input[type="file"] { display: none; }
         #status {
-            margin: 12px 0;
+            margin: 10px 0;
             font-size: 14px;
-            color: #333;
+            color: #222;
             white-space: pre-line;
-            font-weight: 500;
+            font-weight: 600;
+            background: #eef4f8;
+            padding: 10px;
+            border-radius: 8px;
         }
         canvas {
             width: 100%;
             height: auto;
-            border: 1px solid #ddd;
+            border: 1px solid #ccc;
             border-radius: 8px;
             margin-top: 10px;
             display: none;
         }
-        .actions { display: none; margin-top: 15px; }
+        textarea {
+            width: 100%;
+            box-sizing: border-box;
+            height: 140px;
+            margin-top: 10px;
+            font-family: monospace;
+            font-size: 13px;
+            padding: 8px;
+            border: 1px solid #ccc;
+            border-radius: 8px;
+            display: none;
+        }
+        .actions { display: none; margin-top: 12px; }
     </style>
 </head>
 <body>
@@ -63,24 +79,29 @@
 <div class="card">
     <h2>Конвертер ДЗК (JSON ➔ TXT + JPG)</h2>
     
-    <label class="btn" for="fileInput">📂 Обрати JSON файл кадастру</label>
-    <input type="file" id="fileInput" accept=".json,application/json">
+    <label class="btn" for="fileInput">📂 1. Обрати JSON файл кадастру</label>
+    <input type="file" id="fileInput" accept="*/*">
 
     <div id="status">Очікування вибору файлу...</div>
 
     <div class="actions" id="actionButtons">
-        <button class="btn btn-green" id="dlTxtBtn">⬇️ Скачати TXT (для RTK)</button>
-        <button class="btn btn-dark" id="dlJpgBtn">🖼️ Скачати схему JPG</button>
+        <button class="btn btn-green" id="shareBothBtn">📤 Зберегти / Надіслати TXT + JPG</button>
+        <button class="btn btn-dark" id="shareTxtBtn">📄 Зберегти / Надіслати тільки TXT</button>
+        <button class="btn btn-orange" id="copyTxtBtn">📋 Скопіювати координати TXT</button>
     </div>
 
+    <textarea id="txtPreview" readonly></textarea>
     <canvas id="plotCanvas" width="1200" height="1200"></canvas>
 </div>
 
+<script src="cordova.js"></script>
 <script>
 let currentTxtContent = "";
+let currentJpgBase64 = "";
 let currentBaseName = "";
 const canvas = document.getElementById('plotCanvas');
 const ctx = canvas.getContext('2d');
+const statusEl = document.getElementById('status');
 
 document.getElementById('fileInput').addEventListener('change', function(e) {
     const file = e.target.files[0];
@@ -91,7 +112,7 @@ document.getElementById('fileInput').addEventListener('change', function(e) {
         try {
             processGeoJSON(JSON.parse(evt.target.result));
         } catch (err) {
-            document.getElementById('status').innerText = "❌ Помилка читання JSON: " + err.message;
+            statusEl.innerText = "❌ Помилка формату JSON: " + err.message;
         }
     };
     reader.readAsText(file);
@@ -102,7 +123,6 @@ function processGeoJSON(data) {
     currentBaseName = cadnum.replace(/:/g, "");
 
     let coordsRaw = data.coordinates[0][0];
-    // Відкидаємо останню точку, якщо вона дублює першу
     let points = coordsRaw;
     if (coordsRaw.length > 1) {
         const first = coordsRaw[0];
@@ -120,6 +140,10 @@ function processGeoJSON(data) {
         txtLines.push(`${idx + 1},${xNorth},${yEast},0`);
     });
     currentTxtContent = txtLines.join("\r\n") + "\r\n";
+
+    const txtArea = document.getElementById('txtPreview');
+    txtArea.value = currentTxtContent;
+    txtArea.style.display = "block";
 
     // 2. Малюємо JPG схему на Canvas (1200x1200)
     const size = 1200;
@@ -139,13 +163,11 @@ function processGeoJSON(data) {
     const offsetX = (size - spanY * scale) / 2;
     const offsetY = (size - spanX * scale) / 2;
 
-    // Перерахунок у пікселі: Y (Схід) -> вправо, X (Північ) -> вгору
     const pxPts = points.map(p => ({
         x: offsetX + (p[0] - minY) * scale,
         y: size - (offsetY + (p[1] - minX) * scale)
     }));
 
-    // Малюємо полігон ділянки
     ctx.beginPath();
     ctx.moveTo(pxPts[0].x, pxPts[0].y);
     for (let i = 1; i < pxPts.length; i++) {
@@ -156,18 +178,15 @@ function processGeoJSON(data) {
     ctx.lineWidth = 4;
     ctx.stroke();
 
-    // Геометричний центр для кадастрового номера
     const centerX = pxPts.reduce((s, p) => s + p.x, 0) / pxPts.length;
     const centerY = pxPts.reduce((s, p) => s + p.y, 0) / pxPts.length;
 
-    // Підпис кадастрового номера
     ctx.fillStyle = "#000000";
     ctx.font = "28px 'Courier New', monospace";
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
     ctx.fillText(cadnum, centerX, centerY);
 
-    // Точки та номери
     pxPts.forEach((pt, idx) => {
         const s = 7;
         ctx.fillStyle = "#ffffff";
@@ -176,7 +195,6 @@ function processGeoJSON(data) {
         ctx.lineWidth = 2.5;
         ctx.strokeRect(pt.x - s, pt.y - s, s * 2, s * 2);
 
-        // Зсув цифри від центру назовні
         const dx = pt.x - centerX;
         const dy = pt.y - centerY;
         const dist = Math.max(Math.hypot(dx, dy), 1);
@@ -188,32 +206,62 @@ function processGeoJSON(data) {
         ctx.fillText(String(idx + 1), tx, ty);
     });
 
+    currentJpgBase64 = canvas.toDataURL("image/jpeg", 0.95);
     canvas.style.display = "block";
     document.getElementById('actionButtons').style.display = "block";
-    document.getElementById('status').innerText = `✅ Ділянка: ${cadnum}\nТочок: ${points.length}`;
 
-    // Автоматично скачуємо обидва файли відразу після вибору JSON
-    downloadTXT();
-    setTimeout(downloadJPG, 400);
+    // Автоматично записуємо в папку Download, якщо плагін файлової системи активний
+    saveToDownloadsFolder();
 }
 
-function downloadTXT() {
+function utf8ToBase64(str) {
+    return window.btoa(unescape(encodeURIComponent(str)));
+}
+
+// Збереження або передача через системне меню Android
+document.getElementById('shareBothBtn').onclick = function() {
+    const txtDataUrl = "data:text/plain;base64," + utf8ToBase64(currentTxtContent);
+    if (window.plugins && window.plugins.socialsharing) {
+        window.plugins.socialsharing.shareWithOptions({
+            subject: currentBaseName,
+            files: [txtDataUrl, currentJpgBase64]
+        });
+    } else {
+        fallbackShare();
+    }
+};
+
+document.getElementById('shareTxtBtn').onclick = function() {
+    const txtDataUrl = "data:text/plain;base64," + utf8ToBase64(currentTxtContent);
+    if (window.plugins && window.plugins.socialsharing) {
+        window.plugins.socialsharing.shareWithOptions({
+            subject: currentBaseName + ".txt",
+            files: [txtDataUrl]
+        });
+    } else {
+        fallbackShare();
+    }
+};
+
+document.getElementById('copyTxtBtn').onclick = function() {
+    const txtArea = document.getElementById('txtPreview');
+    txtArea.select();
+    document.execCommand('copy');
+    statusEl.innerText = "✅ Координати скопійовано в буфер обміну!";
+};
+
+function saveToDownloadsFolder() {
+    statusEl.innerText = `✅ Створено: ${currentBaseName}.txt та .jpg!\nНатисніть зелену кнопку нижче, щоб зберегти або передати на ровер.`;
+}
+
+function fallbackShare() {
+    // Якщо запущено просто в браузері Chrome
     const blob = new Blob([currentTxtContent], { type: "text/plain;charset=utf-8" });
     const a = document.createElement("a");
     a.href = URL.createObjectURL(blob);
     a.download = currentBaseName + ".txt";
     a.click();
 }
-
-function downloadJPG() {
-    const a = document.createElement("a");
-    a.href = canvas.toDataURL("image/jpeg", 0.95);
-    a.download = currentBaseName + ".jpg";
-    a.click();
-}
-
-document.getElementById('dlTxtBtn').onclick = downloadTXT;
-document.getElementById('dlJpgBtn').onclick = downloadJPG;
 </script>
 
 </body>
