@@ -31,6 +31,7 @@ jobs:
           cp index.html app/www/index.html
           cd app
           cordova platform add android@13.0.0
+          cordova plugin add cordova-plugin-x-socialsharing
           cordova build android --debug
 
       - name: Upload Ready APK
