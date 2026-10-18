@@ -3,8 +3,11 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Кадастр JSON -> TXT / JPG / KML</title>
+    <title>Кадастр JSON + PDF -> TXT / JPG / KML</title>
+    <!-- Proj4js для геодезичних перерахунків -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/proj4js/2.9.0/proj4.js"></script>
+    <!-- PDF.js для витягування даних із PDF довідок ДЗК -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
     <style>
         body {
             font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
@@ -41,7 +44,7 @@
             display: block;
             width: 100%;
             box-sizing: border-box;
-            padding: 14px;
+            padding: 13px;
             margin: 8px 0;
             font-size: 15px;
             font-weight: bold;
@@ -57,6 +60,7 @@
         .btn-purple { background: #6a4c93; }
         .btn-dark { background: #14213d; }
         .btn-orange { background: #e76f51; }
+        .btn-pdf { background: #c1121f; }
         
         input[type="file"] { display: none; }
         #status {
@@ -69,6 +73,18 @@
             padding: 10px;
             border-radius: 8px;
             text-align: left;
+        }
+        #pdfInfoBox {
+            display: none;
+            margin: 10px 0;
+            font-size: 13px;
+            color: #14213d;
+            background: #fff8e6;
+            border-left: 4px solid #e76f51;
+            padding: 10px;
+            border-radius: 6px;
+            text-align: left;
+            white-space: pre-line;
         }
         canvas {
             width: 100%;
@@ -132,14 +148,17 @@
 <body>
 
 <div class="card">
-    <h2>Конвертер ДЗК (Digitals Datums)</h2>
+    <h2>Конвертер ДЗК (JSON + PDF)</h2>
     
-    <label class="btn btn-green" for="fileInput">📂 1. Обрати JSON файл кадастру</label>
-    <input type="file" id="fileInput" accept="*/*">
+    <label class="btn btn-green" for="fileInput">📂 1. Обрати JSON файл координат</label>
+    <input type="file" id="fileInput" accept=".json,application/json,*/*">
+
+    <label class="btn btn-pdf" for="pdfInput">📄 2. Додати PDF довідку ДЗК (опція)</label>
+    <input type="file" id="pdfInput" accept=".pdf,application/pdf">
 
     <div class="setup-box">
         <label style="font-size:13px; font-weight:bold;">Назва (Кадастровий № або ім'я файлу):</label>
-        <input type="text" id="cadnumInput" class="text-input" placeholder="Автоматично з JSON або введіть..." style="margin-bottom:10px;">
+        <input type="text" id="cadnumInput" class="text-input" placeholder="Автоматично з JSON / PDF або введіть..." style="margin-bottom:10px;">
         
         <label style="font-size:13px; font-weight:bold; display:block;">Система координат (за Datums.ini Digitals):</label>
         <select id="crsSelect" class="crs-select" style="margin-top:4px;">
@@ -158,6 +177,7 @@
     </div>
 
     <div id="status">Очікування вибору файлу...</div>
+    <div id="pdfInfoBox"></div>
 
     <div class="actions" id="actionButtons">
         <div class="btn-grid">
@@ -185,7 +205,7 @@
         <div class="section-title">Каталог координат (№, X_Північ, Y_Схід, H):</div>
         <textarea id="txtPreview" readonly></textarea>
 
-        <div class="section-title">Біла схема:</div>
+        <div class="section-title">Біла схема (з інфоблоком знизу):</div>
         <canvas id="plotCanvas" width="1200" height="1200"></canvas>
         
         <div id="satContainer" style="display: none;">
@@ -197,6 +217,10 @@
 
 <script src="cordova.js"></script>
 <script>
+if (typeof pdfjsLib !== 'undefined') {
+    pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+}
+
 let currentTxtContent = "";
 let currentSchemaBase64 = "";
 let currentKmlContent = "";
@@ -205,47 +229,36 @@ let currentDisplayLabel = "Dilyanka";
 let currentWgs84Points = [];
 let lastGeoJSON = null;
 let lastUploadedFileName = "Dilyanka";
+let parsedPdfMeta = null;
 
 const canvas = document.getElementById('plotCanvas');
 const ctx = canvas.getContext('2d');
 const satCanvas = document.getElementById('satCanvas');
 const satCtx = satCanvas.getContext('2d');
 const statusEl = document.getElementById('status');
+const pdfInfoBox = document.getElementById('pdfInfoBox');
 const displayArea = document.getElementById('displayArea');
 const satContainer = document.getElementById('satContainer');
 const cadnumInput = document.getElementById('cadnumInput');
 
 // Точні осьові меридіани МСК України (з Datums.ini Digitals)
 const mskMeridians = {
-    '01': 34.0,             // АР Крим (34°00')
-    '05': 28 + 40/60,       // Вінницька (28°40' = 28.6666667) з твого Datums.ini!
-    '07': 25 + 20/60,       // Волинська (25°20')
-    '12': 34 + 50/60,       // Дніпропетровська (34°50')
-    '14': 37 + 50/60,       // Донецька (37°50')
-    '18': 28 + 30/60,       // Житомирська (28°30')
-    '21': 23 + 30/60,       // Закарпатська (23°30')
-    '23': 35 + 25/60,       // Запорізька (35°25')
-    '26': 24 + 45/60,       // Івано-Франківська (24°45')
-    '32': 30 + 30/60,       // Київська (30°30')
-    '35': 32 + 25/60,       // Кіровоградська (32°25')
-    '44': 39 + 10/60,       // Луганська (39°10')
-    '46': 24 + 00/60,       // Львівська (24°00')
-    '48': 32 + 00/60,       // Миколаївська (32°00')
-    '51': 30 + 20/60,       // Одеська (30°20')
-    '53': 34 + 15/60,       // Полтавська (34°15')
-    '56': 26 + 30/60,       // Рівненська (26°30')
-    '59': 34 + 20/60,       // Сумська (34°20')
-    '61': 25 + 40/60,       // Тернопільська (25°40')
-    '63': 36 + 25/60,       // Харківська (36°25')
-    '65': 33 + 30/60,       // Херсонська (33°30')
-    '68': 27 + 00/60,       // Хмельницька (27°00')
-    '71': 31 + 30/60,       // Черкаська (31°30') з твого Datums.ini!
-    '73': 25 + 50/60,       // Чернівецька (25°50')
-    '74': 31 + 50/60,       // Чернігівська (31°50')
-    '80': 30 + 30/60,       // м. Київ (30°30') з твого Datums.ini!
-    '85': 33 + 30/60        // м. Севастополь
+    '01': 34.0, '05': 28 + 40/60, '07': 25 + 20/60, '12': 34 + 50/60,
+    '14': 37 + 50/60, '18': 28 + 30/60, '21': 23 + 30/60, '23': 35 + 25/60,
+    '26': 24 + 45/60, '32': 30 + 30/60, '35': 32 + 25/60, '44': 39 + 10/60,
+    '46': 24 + 00/60, '48': 32 + 00/60, '51': 30 + 20/60, '53': 34 + 15/60,
+    '56': 26 + 30/60, '59': 34 + 20/60, '61': 25 + 40/60, '63': 36 + 25/60,
+    '65': 33 + 30/60, '68': 27 + 00/60, '71': 31 + 30/60, '73': 25 + 50/60,
+    '74': 31 + 50/60, '80': 30 + 30/60, '85': 33 + 30/60
 };
 
+function formatCadnum19(str) {
+    let m = String(str).match(/\b(\d{10}):?(\d{2}):?(\d{3}):?(\d{4})\b/);
+    if (m) return `${m[1]}:${m[2]}:${m[3]}:${m[4]}`;
+    return null;
+}
+
+// 1. Завантаження JSON
 document.getElementById('fileInput').addEventListener('change', function(e) {
     const file = e.target.files[0];
     if (!file) return;
@@ -263,6 +276,89 @@ document.getElementById('fileInput').addEventListener('change', function(e) {
     };
     reader.readAsText(file);
 });
+
+// 2. Завантаження PDF довідки ДЗК
+document.getElementById('pdfInput').addEventListener('change', async function(e) {
+    const file = e.target.files[0];
+    if (!file) return;
+
+    let nameCad = formatCadnum19(file.name);
+    if (nameCad) {
+        cadnumInput.value = nameCad;
+    }
+
+    try {
+        const arrayBuffer = await file.arrayBuffer();
+        const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+        let fullText = "";
+
+        for (let i = 1; i <= pdf.numPages; i++) {
+            const page = await pdf.getPage(i);
+            const textContent = await page.getTextContent();
+            const pageStr = textContent.items.map(item => item.str).join(" ");
+            fullText += pageStr + "\n";
+        }
+
+        parseDzkPdfText(fullText, nameCad);
+
+        if (lastGeoJSON) {
+            processGeoJSON(lastGeoJSON, false);
+        } else {
+            statusEl.innerText = "✅ PDF прочитано! Тепер оберіть JSON файл координат.";
+        }
+    } catch (err) {
+        if (nameCad) {
+            parsedPdfMeta = { cadnum: nameCad };
+            pdfInfoBox.style.display = "block";
+            pdfInfoBox.innerText = `📄 З назви PDF взято кадастровий №:\n${nameCad}`;
+            if (lastGeoJSON) processGeoJSON(lastGeoJSON, false);
+        } else {
+            alert("Не вдалося прочитати PDF: " + err.message);
+        }
+    }
+});
+
+function parseDzkPdfText(text, fallbackCad) {
+    const clean = text.replace(/\s+/g, " ");
+
+    let cadMatch = clean.match(/\b\d{10}:\d{2}:\d{3}:\d{4}\b/);
+    let cadnum = cadMatch ? cadMatch[0] : (fallbackCad || "");
+
+    let areaMatch = clean.match(/Площа земельної ділянки\s+([0-9.,]+)/i);
+    let area = areaMatch ? areaMatch[1] : "";
+
+    let purposeMatch = clean.match(/Цільове призначення\s+(.+?)\s+Категорія земель/i);
+    let purpose = purposeMatch ? purposeMatch[1].trim() : "";
+
+    let locMatch = clean.match(/Місце розташування\s+(.+?)\s+(?:Інформація про документацію|Відомості про|Технічна документація|Проект землеустрою)/i);
+    let location = locMatch ? locMatch[1].trim() : "";
+
+    let ownerMatch = clean.match(/Прізвище,\s*ім'я та по батькові фізичної особи\s+([А-ЯІЇЄҐA-Z'\-\s]+?)\s+(?:Дата державної|Номер запису|Частка|Форма власності)/i);
+    let owner = ownerMatch ? ownerMatch[1].trim() : "";
+
+    let tenantMatch = clean.match(/Найменування юридичної особи\s+(.+?)\s+Код ЄДРПОУ/i);
+    let tenant = tenantMatch ? tenantMatch[1].trim() : "";
+
+    let edrpouMatch = clean.match(/Код ЄДРПОУ юридичної особи\s+(\d{8,10})/i);
+    let edrpou = edrpouMatch ? edrpouMatch[1].trim() : "";
+
+    parsedPdfMeta = { cadnum, area, purpose, location, owner, tenant, edrpou };
+
+    if (cadnum) {
+        cadnumInput.value = cadnum;
+    }
+
+    let infoLines = [];
+    if (cadnum) infoLines.push(`📌 Кадастровий №: ${cadnum}`);
+    if (area) infoLines.push(`📐 Площа за PDF: ${area} га`);
+    if (owner) infoLines.push(`👤 Власник: ${owner}`);
+    if (tenant) infoLines.push(`🚜 Орендар: ${tenant}${edrpou ? ' (' + edrpou + ')' : ''}`);
+    if (purpose) infoLines.push(`🌾 Цільове: ${purpose}`);
+    if (location) infoLines.push(`📍 Адреса: ${location}`);
+
+    pdfInfoBox.style.display = "block";
+    pdfInfoBox.innerText = infoLines.join("\n");
+}
 
 document.getElementById('crsSelect').addEventListener('change', function() {
     if (lastGeoJSON) {
@@ -300,16 +396,43 @@ function extractGeoData(data) {
     return { cadnum: String(cadnum).trim(), points };
 }
 
-// Розумне розпізнавання X (Північ) та Y (Схід) незалежно від порядку в JSON
 function normalizePointEN(pt) {
     let a = Number(pt[0]);
     let b = Number(pt[1]);
-    // В Україні X (Північ) у СК-63/МСК/УСК-2000 завжди між 4 800 000 та 5 900 000,
-    // а Y (Схід) або має зону 1..7 спереду (1.1M..4.6M, або 6.1M..7.8M), або без зони (100k..600k)
     if (a >= 4800000 && a <= 5950000 && (b < 4800000 || b > 6000000)) {
-        return { eastY: b, northX: a }; // Якщо в JSON випадково записано [X, Y]
+        return { eastY: b, northX: a };
     }
-    return { eastY: a, northX: b }; // Стандартний GeoJSON ДЗК [Y_East, X_North]
+    return { eastY: a, northX: b };
+}
+
+function calcPolygonAreaHa(pts) {
+    let sum = 0;
+    for (let i = 0; i < pts.length; i++) {
+        let p1 = pts[i];
+        let p2 = pts[(i + 1) % pts.length];
+        sum += (p1.eastY * p2.northX - p2.eastY * p1.northX);
+    }
+    return Math.abs(sum) / 2.0 / 10000.0;
+}
+
+// Допоміжна функція для автоматичного переносу довгих рядків на Canvas
+function wrapCanvasText(context, text, maxWidth) {
+    const words = text.split(' ');
+    let lines = [];
+    let currentLine = words[0] || "";
+
+    for (let i = 1; i < words.length; i++) {
+        let word = words[i];
+        let width = context.measureText(currentLine + " " + word).width;
+        if (width < maxWidth) {
+            currentLine += " " + word;
+        } else {
+            lines.push(currentLine);
+            currentLine = word;
+        }
+    }
+    if (currentLine) lines.push(currentLine);
+    return lines;
 }
 
 function processGeoJSON(data, isNewFile) {
@@ -324,8 +447,11 @@ function processGeoJSON(data, isNewFile) {
     if (isNewFile) {
         if (extracted.cadnum && extracted.cadnum !== "unknown" && extracted.cadnum !== "") {
             cadnumInput.value = extracted.cadnum;
+        } else if (parsedPdfMeta && parsedPdfMeta.cadnum) {
+            cadnumInput.value = parsedPdfMeta.cadnum;
         } else {
-            cadnumInput.value = lastUploadedFileName || "Dilyanka";
+            let fromFileName = formatCadnum19(lastUploadedFileName);
+            cadnumInput.value = fromFileName || lastUploadedFileName || "Dilyanka";
         }
     }
 
@@ -339,6 +465,8 @@ function processGeoJSON(data, isNewFile) {
             normPts = normPts.slice(0, -1);
         }
     }
+
+    const calcAreaHa = calcPolygonAreaHa(normPts);
 
     // 1. Формуємо TXT (Номер, X_Північ, Y_Схід, 0)
     let txtLines = [];
@@ -357,7 +485,6 @@ function processGeoJSON(data, isNewFile) {
             let firstE = normPts[0].eastY;
             let firstN = normPts[0].northX;
 
-            // Автоматичне визначення режиму при AUTO
             let effectiveMode = mode;
             if (mode === "AUTO") {
                 if (firstN < 100000 && firstE < 100000) {
@@ -367,7 +494,6 @@ function processGeoJSON(data, isNewFile) {
                     if (z >= 1 && z <= 6) {
                         effectiveMode = "SK63_" + z;
                     } else {
-                        // Якщо зона не вказана (напр. Y = 285000 в МСК)
                         let cleanDigits = currentDisplayLabel.replace(/\D/g, "");
                         let reg = cleanDigits.length >= 2 ? cleanDigits.substring(0, 2) : "05";
                         effectiveMode = (reg === "05") ? "MSK05" : "MSK_AUTO";
@@ -375,8 +501,6 @@ function processGeoJSON(data, isNewFile) {
                 }
             }
 
-            // Параметри Helmert з Datums.ini Digitals: 25.0 -141 -78.5 0.0 -0.35 -0.736 0.0
-            // У форматі WKT/Proj4 (Position Vector): TOWGS84[25,-141,-78.5,0,0.35,0.736,0]
             const helmertDigitals = "25,-141,-78.5,0,0.35,0.736,0";
             let L0 = 29.5;
             let falseEast = 3300000;
@@ -385,20 +509,18 @@ function processGeoJSON(data, isNewFile) {
 
             if (effectiveMode.startsWith("SK63_")) {
                 let z = parseInt(effectiveMode.split("_")[1]);
-                // PrimeMeridian=22, ZoneSize=3 -> Осьовий меридіан зони z = 22 + (z - 0.5) * 3 = 20.5 + 3*z
                 L0 = 20.5 + 3.0 * z;
                 let hasZone = Math.floor(firstE / 1000000) === z;
                 falseEast = (hasZone ? z * 1000000 : 0) + 300000;
                 falseNorth = -9214.688;
-                sysInfo = `СК-63 Зона ${z} (L0=${L0}°, FE=${falseEast}, FN=-9214.688)`;
+                sysInfo = `СК-63 Зона ${z} (L0=${L0}°)`;
             } 
             else if (effectiveMode === "MSK05") {
-                // З твого Datums.ini: [MSK-05] CentralMeridian=28°40', FalseEast=300000, FalseNorth=0, AddZone=0
                 L0 = 28 + 40/60;
                 let zPref = Math.floor(firstE / 1000000);
                 falseEast = (zPref > 0 ? zPref * 1000000 : 0) + 300000;
                 falseNorth = 0;
-                sysInfo = `МСК-05 Вінницька (L0=28°40', FE=${falseEast}, FN=0)`;
+                sysInfo = `МСК-05 Вінницька (L0=28°40')`;
             } 
             else if (effectiveMode === "MSK_AUTO") {
                 let cleanDigits = currentDisplayLabel.replace(/\D/g, "");
@@ -407,19 +529,18 @@ function processGeoJSON(data, isNewFile) {
                 let zPref = Math.floor(firstE / 1000000);
                 falseEast = (zPref > 0 ? zPref * 1000000 : 0) + 300000;
                 falseNorth = 0;
-                sysInfo = `МСК-${reg} (L0=${L0.toFixed(4)}°, FE=${falseEast}, FN=0)`;
+                sysInfo = `МСК-${reg} (L0=${L0.toFixed(4)}°)`;
             } 
             else if (effectiveMode === "USK2000") {
                 let z = Math.floor(firstE / 1000000);
-                if (z < 4 || z > 7) z = 5; // За замовчуванням 5 зона (L0=27)
-                L0 = 6.0 * z - 3.0; // Зона 4->21, 5->27, 6->33, 7->39
+                if (z < 4 || z > 7) z = 5;
+                L0 = 6.0 * z - 3.0;
                 let hasZone = Math.floor(firstE / 1000000) === z;
                 falseEast = (hasZone ? z * 1000000 : 0) + 500000;
                 falseNorth = 0;
-                sysInfo = `УСК-2000 Зона ${z} (L0=${L0}°, FE=${falseEast}, FN=0)`;
+                sysInfo = `УСК-2000 Зона ${z} (L0=${L0}°)`;
             } 
             else if (effectiveMode === "VIN_LOCAL") {
-                // [Местная(Vin)] перерахунок у СК-63 Зона 3 за твоїми точками з Datums.ini
                 L0 = 29.5;
                 falseEast = 3300000;
                 falseNorth = -9214.688;
@@ -434,7 +555,6 @@ function processGeoJSON(data, isNewFile) {
                 let eY = pt.eastY;
                 let nX = pt.northX;
                 if (effectiveMode === "VIN_LOCAL") {
-                    // Зсув із TiePoints [Местная(Vin)] у СК-63 (Зона 3)
                     nX += 5405692.6;
                     eY += 3207213.4;
                 }
@@ -448,6 +568,15 @@ function processGeoJSON(data, isNewFile) {
             const cLon = currentWgs84Points.reduce((s, p) => s + p.lon, 0) / currentWgs84Points.length;
             const cLat = currentWgs84Points.reduce((s, p) => s + p.lat, 0) / currentWgs84Points.length;
 
+            let kmlDesc = `Площа за координатами: ${calcAreaHa.toFixed(4)} га`;
+            if (parsedPdfMeta) {
+                if (parsedPdfMeta.area) kmlDesc += `\nПлоща за ДЗК: ${parsedPdfMeta.area} га`;
+                if (parsedPdfMeta.owner) kmlDesc += `\nВласник: ${parsedPdfMeta.owner}`;
+                if (parsedPdfMeta.tenant) kmlDesc += `\nОрендар: ${parsedPdfMeta.tenant}`;
+                if (parsedPdfMeta.purpose) kmlDesc += `\nЦільове: ${parsedPdfMeta.purpose}`;
+                if (parsedPdfMeta.location) kmlDesc += `\nАдреса: ${parsedPdfMeta.location}`;
+            }
+
             currentKmlContent = `<?xml version="1.0" encoding="UTF-8"?>
 <kml xmlns="http://www.opengis.net/kml/2.2">
   <Document>
@@ -458,6 +587,7 @@ function processGeoJSON(data, isNewFile) {
     </Style>
     <Placemark>
       <name>${currentDisplayLabel}</name>
+      <description><![CDATA[${kmlDesc.replace(/\n/g, '<br/>')}]]></description>
       <styleUrl>#polyStyle</styleUrl>
       <Polygon>
         <outerBoundaryIs><LinearRing><coordinates>${kmlCoords}</coordinates></LinearRing></outerBoundaryIs>
@@ -466,48 +596,121 @@ function processGeoJSON(data, isNewFile) {
   </Document>
 </kml>`;
             
-            statusEl.innerText = `✅ Назва: ${currentDisplayLabel}\n⚙️ ${sysInfo}\n📍 Центр WGS84: ${cLat.toFixed(6)}, ${cLon.toFixed(6)}`;
+            statusEl.innerText = `✅ Назва: ${currentDisplayLabel}\n📐 Площа (коорд.): ${calcAreaHa.toFixed(4)} га | Точок: ${normPts.length}\n⚙️ ${sysInfo}\n📍 Центр WGS84: ${cLat.toFixed(6)}, ${cLon.toFixed(6)}`;
         } catch (e) {
             statusEl.innerText = "⚠️ Помилка перерахунку: " + e.message;
         }
     }
 
-    // 3. Малюємо Білу Схему (JPG)
-    const size = 1200, pad = 180;
-    ctx.fillStyle = "#ffffff"; ctx.fillRect(0, 0, size, size);
+    // 3. Малюємо Білу Схему (JPG) з окремим інфоблоком знизу (без накладання на ділянку!)
+    const width = 1200;
+    const plotAreaHeight = 960; // Верхня зона виключно під графіку ділянки та номери точок
+    const plotPad = 120;        // Відступ усередині графічної зони, щоб цифри точок не вилазили за межі
 
+    // Підготовка рядків для нижнього текстового блоку
+    let rawDetailLines = [];
+    if (parsedPdfMeta) {
+        let areaLine = `Площа: ${ parsedPdfMeta.area ? parsedPdfMeta.area + ' га (за ДЗК) / ' : '' }${calcAreaHa.toFixed(4)} га (за коорд.)`;
+        rawDetailLines.push(areaLine);
+        if (parsedPdfMeta.owner) rawDetailLines.push(`Власник: ${parsedPdfMeta.owner}`);
+        if (parsedPdfMeta.tenant) {
+            rawDetailLines.push(`Орендар: ${parsedPdfMeta.tenant}${parsedPdfMeta.edrpou ? ' (ЄДРПОУ ' + parsedPdfMeta.edrpou + ')' : ''}`);
+        }
+        if (parsedPdfMeta.purpose) rawDetailLines.push(`Цільове: ${parsedPdfMeta.purpose}`);
+        if (parsedPdfMeta.location) rawDetailLines.push(`Адреса: ${parsedPdfMeta.location}`);
+    } else {
+        rawDetailLines.push(`Площа за координатами: ${calcAreaHa.toFixed(4)} га | Кількість точок: ${normPts.length}`);
+    }
+
+    // Вимірюємо переноси довгих рядків
+    ctx.font = "22px -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif";
+    let wrappedDetails = [];
+    const maxTextWidth = width - 120;
+    rawDetailLines.forEach(line => {
+        let subLines = wrapCanvasText(ctx, line, maxTextWidth);
+        wrappedDetails.push(...subLines);
+    });
+
+    const lineHeight = 32;
+    const footerBlockHeight = Math.max(160, 85 + wrappedDetails.length * lineHeight + 35);
+    const totalHeight = plotAreaHeight + footerBlockHeight;
+
+    canvas.width = width;
+    canvas.height = totalHeight;
+
+    // Білий фон на все полотно
+    ctx.fillStyle = "#ffffff";
+    ctx.fillRect(0, 0, width, totalHeight);
+
+    // Масштабування полігона суворо всередині верхньої зони (width x plotAreaHeight)
     const ys = normPts.map(p => p.eastY), xs = normPts.map(p => p.northX);
     const minY = Math.min(...ys), maxY = Math.max(...ys), minX = Math.min(...xs), maxX = Math.max(...xs);
     const spanY = Math.max(maxY - minY, 0.001), spanX = Math.max(maxX - minX, 0.001);
-    const scale = (size - 2 * pad) / Math.max(spanY, spanX);
-    const offsetX = (size - spanY * scale) / 2, offsetY = (size - spanX * scale) / 2;
+    const availW = width - 2 * plotPad;
+    const availH = plotAreaHeight - 2 * plotPad;
+    const scale = Math.min(availW / spanY, availH / spanX);
+
+    const offsetX = (width - spanY * scale) / 2;
+    const offsetY = (plotAreaHeight - spanX * scale) / 2;
 
     const pxPts = normPts.map(p => ({
         x: offsetX + (p.eastY - minY) * scale,
-        y: size - (offsetY + (p.northX - minX) * scale)
+        y: plotAreaHeight - (offsetY + (p.northX - minX) * scale)
     }));
 
+    // Контур ділянки (всередині полігона тепер чисто!)
     ctx.beginPath();
     ctx.moveTo(pxPts[0].x, pxPts[0].y);
     for (let i = 1; i < pxPts.length; i++) ctx.lineTo(pxPts[i].x, pxPts[i].y);
     ctx.closePath();
-    ctx.strokeStyle = "#14213d"; ctx.lineWidth = 4; ctx.stroke();
+    ctx.strokeStyle = "#14213d";
+    ctx.lineWidth = 4;
+    ctx.stroke();
 
     const centerX = pxPts.reduce((s, p) => s + p.x, 0) / pxPts.length;
     const centerY = pxPts.reduce((s, p) => s + p.y, 0) / pxPts.length;
 
-    ctx.fillStyle = "#000000"; ctx.font = "bold 28px 'Courier New', monospace";
-    ctx.textAlign = "center"; ctx.textBaseline = "middle";
-    ctx.fillText(currentDisplayLabel, centerX, centerY);
-
+    // Точки та їх номери
     pxPts.forEach((pt, idx) => {
         const s = 7;
-        ctx.fillStyle = "#ffffff"; ctx.fillRect(pt.x - s, pt.y - s, s * 2, s * 2);
-        ctx.strokeStyle = "#14213d"; ctx.lineWidth = 2.5; ctx.strokeRect(pt.x - s, pt.y - s, s * 2, s * 2);
+        ctx.fillStyle = "#ffffff";
+        ctx.fillRect(pt.x - s, pt.y - s, s * 2, s * 2);
+        ctx.strokeStyle = "#14213d";
+        ctx.lineWidth = 2.5;
+        ctx.strokeRect(pt.x - s, pt.y - s, s * 2, s * 2);
+
         const dx = pt.x - centerX, dy = pt.y - centerY;
         const dist = Math.max(Math.hypot(dx, dy), 1);
-        ctx.fillStyle = "#000000"; ctx.font = "26px 'Courier New', monospace";
-        ctx.fillText(String(idx + 1), pt.x + (dx/dist)*32, pt.y + (dy/dist)*32);
+        ctx.fillStyle = "#000000";
+        ctx.font = "25px 'Courier New', monospace";
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        ctx.fillText(String(idx + 1), pt.x + (dx / dist) * 32, pt.y + (dy / dist) * 32);
+    });
+
+    // Горизонтальна лінія-розділювач перед нижнім інфоблоком
+    ctx.beginPath();
+    ctx.moveTo(60, plotAreaHeight);
+    ctx.lineTo(width - 60, plotAreaHeight);
+    ctx.strokeStyle = "#cccccc";
+    ctx.lineWidth = 2;
+    ctx.stroke();
+
+    // 1-й рядок інфоблоку: Кадастровий номер (жирним шрифтом)
+    let textY = plotAreaHeight + 42;
+    ctx.fillStyle = "#000000";
+    ctx.font = "bold 32px 'Courier New', monospace";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillText(currentDisplayLabel, width / 2, textY);
+
+    // Наступні рядки інфоблоку: дрібним шрифтом
+    textY += 44;
+    ctx.fillStyle = "#222222";
+    ctx.font = "22px -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif";
+    wrappedDetails.forEach(line => {
+        ctx.fillText(line, width / 2, textY);
+        textY += lineHeight;
     });
 
     currentSchemaBase64 = canvas.toDataURL("image/jpeg", 0.95).split(',')[1];
@@ -580,15 +783,12 @@ document.getElementById('shareSatBtn').onclick = async function() {
         for (let i = 1; i < satPts.length; i++) satCtx.lineTo(satPts[i].x, satPts[i].y);
         satCtx.closePath();
 
-        satCtx.fillStyle = "rgba(255, 0, 0, 0.25)"; satCtx.fill();
+        satCtx.fillStyle = "rgba(255, 0, 0, 0.22)"; satCtx.fill();
         satCtx.strokeStyle = "#ff0000"; satCtx.lineWidth = 4; satCtx.stroke();
 
-        satCtx.font = "bold 26px 'Courier New', monospace";
+        // Точки та номери на супутнику (без тексту всередині контуру)
+        satCtx.font = "bold 25px 'Courier New', monospace";
         satCtx.textAlign = "center"; satCtx.textBaseline = "middle";
-        satCtx.lineWidth = 4; satCtx.strokeStyle = "#ffffff";
-        
-        satCtx.strokeText(currentDisplayLabel, halfSize, halfSize);
-        satCtx.fillStyle = "#ff0000"; satCtx.fillText(currentDisplayLabel, halfSize, halfSize);
 
         satPts.forEach((pt, idx) => {
             const s = 6;
@@ -600,6 +800,13 @@ document.getElementById('shareSatBtn').onclick = async function() {
             satCtx.lineWidth = 4; satCtx.strokeStyle = "#ffffff"; satCtx.strokeText(String(idx + 1), tx, ty);
             satCtx.fillStyle = "#000000"; satCtx.fillText(String(idx + 1), tx, ty);
         });
+
+        // Плашка знизу супутникового знімка з кадастровим номером
+        satCtx.fillStyle = "rgba(20, 33, 61, 0.82)";
+        satCtx.fillRect(0, size - 70, size, 70);
+        satCtx.font = "bold 30px 'Courier New', monospace";
+        satCtx.fillStyle = "#ffffff";
+        satCtx.fillText(currentDisplayLabel, halfSize, size - 35);
 
         let b64 = satCanvas.toDataURL("image/jpeg", 0.92).split(',')[1];
         satContainer.style.display = "block";
