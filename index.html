@@ -132,7 +132,6 @@ function processGeoJSON(data) {
         }
     }
 
-    // 1. Формуємо TXT (Номер, X_Північ, Y_Схід, 0)
     let txtLines = [];
     points.forEach((pt, idx) => {
         const yEast = Number(pt[0]);
@@ -145,7 +144,6 @@ function processGeoJSON(data) {
     txtArea.value = currentTxtContent;
     txtArea.style.display = "block";
 
-    // 2. Малюємо JPG схему на Canvas (1200x1200)
     const size = 1200;
     const pad = 180;
     ctx.fillStyle = "#ffffff";
@@ -206,9 +204,9 @@ function processGeoJSON(data) {
         ctx.fillText(String(idx + 1), tx, ty);
     });
 
-    // Формуємо правильний заголовок df:filename для JPG
+    // ПРАВИЛЬНИЙ ФОРМАТ: image/jpeg 
     const rawJpgBase64 = canvas.toDataURL("image/jpeg", 0.95).split(',')[1];
-    currentJpgBase64 = `df:${currentBaseName}.jpg;data:image/jpg;base64,` + rawJpgBase64;
+    currentJpgBase64 = `df:${currentBaseName}.jpg;data:image/jpeg;base64,` + rawJpgBase64;
 
     canvas.style.display = "block";
     document.getElementById('actionButtons').style.display = "block";
@@ -219,10 +217,9 @@ function utf8ToBase64(str) {
     return window.btoa(unescape(encodeURIComponent(str)));
 }
 
-// Префікс df:ім'я_файлу.txt;data:text/txt;base64,... у cordova-plugin-x-socialsharing
-// примусово задає і точне ім'я файлу (кадастровий номер), і розширення .txt!
+// ПРАВИЛЬНИЙ ФОРМАТ: text/plain
 document.getElementById('shareBothBtn').onclick = function() {
-    const txtDataUrl = `df:${currentBaseName}.txt;data:text/txt;base64,` + utf8ToBase64(currentTxtContent);
+    const txtDataUrl = `df:${currentBaseName}.txt;data:text/plain;base64,` + utf8ToBase64(currentTxtContent);
     if (window.plugins && window.plugins.socialsharing) {
         window.plugins.socialsharing.shareWithOptions({
             subject: currentBaseName,
@@ -234,7 +231,7 @@ document.getElementById('shareBothBtn').onclick = function() {
 };
 
 document.getElementById('shareTxtBtn').onclick = function() {
-    const txtDataUrl = `df:${currentBaseName}.txt;data:text/txt;base64,` + utf8ToBase64(currentTxtContent);
+    const txtDataUrl = `df:${currentBaseName}.txt;data:text/plain;base64,` + utf8ToBase64(currentTxtContent);
     if (window.plugins && window.plugins.socialsharing) {
         window.plugins.socialsharing.shareWithOptions({
             subject: currentBaseName + ".txt",
