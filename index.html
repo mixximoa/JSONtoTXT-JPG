@@ -118,10 +118,9 @@
     <h2>Кадастр (RTK + Супутник + Google Earth)</h2>
     
     <select id="crsSelect" class="crs-select">
-        <option value="auto">🌐 Система координат: Авто (Пріоритет МСК)</option>
-        <option value="MSK">📌 МСК (Область за кадастровим номером)</option>
+        <option value="SC63" selected>🌐 Система: СК-63 (Основна для ДЗК)</option>
+        <option value="MSK">📌 МСК (Місцева за кадастровим номером)</option>
         <option value="USK2000">📌 УСК-2000 (Зона за координатою Y)</option>
-        <option value="SC63">📌 СК-63 (Зона за координатою Y)</option>
     </select>
     
     <label class="btn" for="fileInput">📂 1. Обрати JSON файл кадастру</label>
@@ -167,7 +166,6 @@
 
 <script src="cordova.js"></script>
 <script>
-// Глобальні змінні
 let currentTxtContent = "";
 let currentSchemaBase64 = "";
 let currentKmlContent = "";
@@ -204,7 +202,7 @@ document.getElementById('fileInput').addEventListener('change', function(e) {
     reader.onload = function(evt) {
         try {
             lastGeoJSON = JSON.parse(evt.target.result);
-            satContainer.style.display = "none"; // Приховуємо старий супутник при новому файлі
+            satContainer.style.display = "none"; 
             processGeoJSON(lastGeoJSON);
         } catch (err) {
             statusEl.innerText = "❌ Помилка читання JSON: " + err.message;
@@ -268,15 +266,9 @@ function processGeoJSON(data) {
     document.getElementById('txtPreview').value = currentTxtContent;
     document.getElementById('txtPreview').style.display = "block";
 
-    // 2. Визначаємо систему координат
-    let sysChoice = document.getElementById('crsSelect').value;
-    let activeSys = sysChoice;
+    // 2. Визначаємо систему координат (СК-63 за замовчуванням)
+    let activeSys = document.getElementById('crsSelect').value;
     let regionCode = currentBaseName.substring(0, 2);
-
-    if (sysChoice === "auto") {
-        if (cadnum !== "unknown" && mskL0[regionCode]) activeSys = "MSK";
-        else activeSys = "SC63";
-    }
 
     currentWgs84Points = [];
     if (typeof proj4 !== 'undefined') {
@@ -285,11 +277,18 @@ function processGeoJSON(data) {
             let projFrom = "";
             let towgs84 = "24,-123,-94,0.02,-0.25,-0.13,1.1"; 
             let zone = Math.floor(firstY / 1000000);
-            if (zone === 0) zone = 3;
+            if (zone === 0) zone = 3; // Базовий запобіжник
 
-            if (activeSys === "MSK") {
+            if (activeSys === "SC63") {
+                // ПРАВИЛЬНА ФОРМУЛА ДЛЯ СК-63
+                let L0 = 20.5 + 3.0 * zone;
+                let falseEasting = zone * 1000000 + 500000;
+                projFrom = `+proj=tmerc +lat_0=0 +lon_0=${L0} +k=1 +x_0=${falseEasting} +y_0=0 +ellps=krass +towgs84=${towgs84} +units=m +no_defs`;
+                statusEl.innerText = `✅ Кад. номер: ${cadnum}\n⚙️ Система: СК-63 (Зона ${zone}, L0=${L0})`;
+            } 
+            else if (activeSys === "MSK") {
                 let L0 = mskL0[regionCode] || 28.5;
-                let falseEasting = zone * 1000000 + 300000;
+                let falseEasting = (firstY > 1000000) ? Math.floor(firstY / 1000000) * 1000000 + 300000 : 300000;
                 projFrom = `+proj=tmerc +lat_0=0 +lon_0=${L0} +k=1 +x_0=${falseEasting} +y_0=0 +ellps=krass +towgs84=${towgs84} +units=m +no_defs`;
                 statusEl.innerText = `✅ Кад. номер: ${cadnum}\n⚙️ Система: МСК (Обл. ${regionCode}, L0=${L0})`;
             } 
@@ -299,13 +298,6 @@ function processGeoJSON(data) {
                 projFrom = `+proj=tmerc +lat_0=0 +lon_0=${L0} +k=1 +x_0=${falseEasting} +y_0=0 +ellps=krass +towgs84=${towgs84} +units=m +no_defs`;
                 statusEl.innerText = `✅ Кад. номер: ${cadnum}\n⚙️ Система: УСК-2000 (Зона ${zone}, L0=${L0})`;
             } 
-            else { 
-                // ВАЖЛИВИЙ ФІКС для СК-63: L0 = 17.5 + 3.0 * zone
-                let L0 = 17.5 + 3.0 * zone;
-                let falseEasting = zone * 1000000 + 500000;
-                projFrom = `+proj=tmerc +lat_0=0 +lon_0=${L0} +k=1 +x_0=${falseEasting} +y_0=0 +ellps=krass +towgs84=${towgs84} +units=m +no_defs`;
-                statusEl.innerText = `✅ Кад. номер: ${cadnum}\n⚙️ Система: СК-63 (Зона ${zone}, L0=${L0})`;
-            }
 
             let projTo = "+proj=longlat +datum=WGS84 +no_defs";
             let kmlCoords = "";
@@ -459,7 +451,6 @@ document.getElementById('shareSatBtn').onclick = async function() {
 
         let b64 = satCanvas.toDataURL("image/jpeg", 0.9).split(',')[1];
         
-        // ВАЖЛИВИЙ ФІКС: Тепер супутник не приховує білу схему, а додається знизу
         satContainer.style.display = "block";
         statusEl.innerText = prevStatus + "\n✅ Супутник згенеровано!";
 
