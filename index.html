@@ -3,7 +3,9 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Кадастр JSON -> TXT / JPG (RTK)</title>
+    <title>Кадастр JSON -> TXT / JPG / KML / Супутник</title>
+    <!-- Геодезична бібліотека Proj4js -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/proj4js/2.9.0/proj4.js"></script>
     <style>
         body {
             font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
@@ -22,12 +24,27 @@
             box-shadow: 0 4px 15px rgba(0,0,0,0.08);
         }
         h2 { margin-top: 0; font-size: 19px; color: #14213d; }
+        
+        .crs-select {
+            width: 100%;
+            padding: 12px;
+            margin-bottom: 12px;
+            font-size: 15px;
+            font-weight: bold;
+            color: #14213d;
+            background-color: #eef4f8;
+            border: 2px solid #1d6fa5;
+            border-radius: 8px;
+            outline: none;
+            cursor: pointer;
+        }
+        
         .btn {
             display: block;
             width: 100%;
             box-sizing: border-box;
             padding: 14px;
-            margin: 10px 0;
+            margin: 8px 0;
             font-size: 15px;
             font-weight: bold;
             color: white;
@@ -38,8 +55,10 @@
         }
         .btn:active { opacity: 0.8; }
         .btn-green { background: #2a9d8f; }
+        .btn-blue { background: #0077b6; }
+        .btn-purple { background: #6a4c93; }
         .btn-dark { background: #14213d; }
-        .btn-orange { background: #e76f51; }
+        
         input[type="file"] { display: none; }
         #status {
             margin: 10px 0;
@@ -62,7 +81,7 @@
         textarea {
             width: 100%;
             box-sizing: border-box;
-            height: 140px;
+            height: 90px;
             margin-top: 10px;
             font-family: monospace;
             font-size: 13px;
@@ -77,7 +96,14 @@
 <body>
 
 <div class="card">
-    <h2>Конвертер ДЗК (JSON ➔ TXT + JPG)</h2>
+    <h2>Кадастр (RTK + Супутник + Google Earth)</h2>
+    
+    <select id="crsSelect" class="crs-select">
+        <option value="auto">🌐 Система координат: Автовизначення</option>
+        <option value="SC63">📌 СК-63 (Зона за координатою Y)</option>
+        <option value="USK2000">📌 УСК-2000 (Зона за координатою Y)</option>
+        <option value="MSK">📌 МСК (Область за кадастровим номером)</option>
+    </select>
     
     <label class="btn" for="fileInput">📂 1. Обрати JSON файл кадастру</label>
     <input type="file" id="fileInput" accept="*/*">
@@ -85,32 +111,62 @@
     <div id="status">Очікування вибору файлу...</div>
 
     <div class="actions" id="actionButtons">
-        <button class="btn btn-green" id="shareBothBtn">📤 Зберегти / Надіслати TXT + JPG</button>
-        <button class="btn btn-dark" id="shareTxtBtn">📄 Зберегти / Надіслати тільки TXT</button>
-        <button class="btn btn-orange" id="copyTxtBtn">📋 Скопіювати координати TXT</button>
+        <button class="btn btn-dark" id="shareBothBtn">📄 Надіслати TXT + Білу Схему</button>
+        <button class="btn btn-blue" id="shareKmlBtn">🌍 Надіслати KML (Google Earth)</button>
+        
+        <!-- Нове меню для супутника -->
+        <hr style="margin:15px 0; border:0; border-top:1px solid #ddd;">
+        <select id="zoomSelect" class="crs-select" style="margin-bottom:8px; border-color:#6a4c93; background-color:#f8f5fd;">
+            <option value="19">🛰️ Масштаб супутника: ~1:500 (Крупно)</option>
+            <option value="17">🛰️ Масштаб супутника: ~1:2000 (Сусіди)</option>
+            <option value="15" selected>🛰️ Масштаб супутника: ~1:8000 (Квартал)</option>
+            <option value="13">🛰️ Масштаб супутника: ~1:30000 (Село/Район)</option>
+        </select>
+        <button class="btn btn-purple" id="shareSatBtn">🛰️ Згенерувати та Надіслати Супутник</button>
     </div>
 
     <textarea id="txtPreview" readonly></textarea>
     <canvas id="plotCanvas" width="1200" height="1200"></canvas>
+    <canvas id="satCanvas" width="1200" height="1200"></canvas>
 </div>
 
 <script src="cordova.js"></script>
 <script>
 let currentTxtContent = "";
 let currentJpgBase64 = "";
+let currentKmlContent = "";
 let currentBaseName = "";
+let currentWgs84Points = []; // Для генерації супутника
+let lastGeoJSON = null;
+
 const canvas = document.getElementById('plotCanvas');
 const ctx = canvas.getContext('2d');
+const satCanvas = document.getElementById('satCanvas');
+const satCtx = satCanvas.getContext('2d');
 const statusEl = document.getElementById('status');
+
+const mskL0 = {
+    '01':34.5, '05':28.5, '07':25.5, '12':34.5, '14':37.5,
+    '18':28.5, '21':22.5, '23':34.5, '26':25.5, '32':31.5,
+    '35':31.5, '44':39.0, '46':22.5, '48':31.5, '51':31.5,
+    '53':34.5, '56':25.5, '59':34.5, '61':25.5, '63':34.5,
+    '65':34.5, '68':25.5, '71':31.5, '73':25.5, '74':31.5,
+    '80':31.5, '85':34.5
+};
+
+document.getElementById('crsSelect').addEventListener('change', function() {
+    if (lastGeoJSON) processGeoJSON(lastGeoJSON);
+});
 
 document.getElementById('fileInput').addEventListener('change', function(e) {
     const file = e.target.files[0];
     if (!file) return;
-
     const reader = new FileReader();
     reader.onload = function(evt) {
         try {
-            processGeoJSON(JSON.parse(evt.target.result));
+            lastGeoJSON = JSON.parse(evt.target.result);
+            satCanvas.style.display = "none";
+            processGeoJSON(lastGeoJSON);
         } catch (err) {
             statusEl.innerText = "❌ Помилка формату JSON: " + err.message;
         }
@@ -134,126 +190,289 @@ function processGeoJSON(data) {
 
     let txtLines = [];
     points.forEach((pt, idx) => {
-        const yEast = Number(pt[0]);
-        const xNorth = Number(pt[1]);
-        txtLines.push(`${idx + 1},${xNorth},${yEast},0`);
+        txtLines.push(`${idx + 1},${Number(pt[1]).toFixed(3)},${Number(pt[0]).toFixed(3)},0`);
     });
     currentTxtContent = txtLines.join("\r\n") + "\r\n";
+    document.getElementById('txtPreview').value = currentTxtContent;
+    document.getElementById('txtPreview').style.display = "block";
 
-    const txtArea = document.getElementById('txtPreview');
-    txtArea.value = currentTxtContent;
-    txtArea.style.display = "block";
+    let sysChoice = document.getElementById('crsSelect').value;
+    let activeSys = "SC63";
 
-    const size = 1200;
-    const pad = 180;
+    if (sysChoice === "auto") {
+        let fileSys = (data.properties && data.properties.coordSys) ? data.properties.coordSys.toUpperCase() : "SC63";
+        if (fileSys.includes("MSK")) activeSys = "MSK";
+        else if (fileSys.includes("USK")) activeSys = "USK2000";
+        else activeSys = "SC63";
+    } else {
+        activeSys = sysChoice;
+    }
+
+    currentWgs84Points = [];
+    
+    if (typeof proj4 !== 'undefined') {
+        try {
+            let firstY = Number(points[0][0]);
+            let regionCode = currentBaseName.substring(0, 2);
+            let projFrom = "";
+            let towgs84 = "24,-123,-94,0.02,-0.25,-0.13,1.1"; 
+
+            if (activeSys === "MSK") {
+                let L0 = mskL0[regionCode] || 28.5;
+                let falseEasting = (firstY > 1000000) ? Math.floor(firstY / 1000000) * 1000000 + 300000 : 300000;
+                projFrom = `+proj=tmerc +lat_0=0 +lon_0=${L0} +k=1 +x_0=${falseEasting} +y_0=0 +ellps=krass +towgs84=${towgs84} +units=m +no_defs`;
+                statusEl.innerText = `✅ Ділянка: ${cadnum}\nВикористано: МСК (Область ${regionCode}, L0=${L0})`;
+            } 
+            else if (activeSys === "USK2000") {
+                let zone = Math.floor(firstY / 1000000);
+                let L0 = 21.0 + 3.0 * (zone - 1);
+                let falseEasting = zone * 1000000 + 500000;
+                projFrom = `+proj=tmerc +lat_0=0 +lon_0=${L0} +k=1 +x_0=${falseEasting} +y_0=0 +ellps=krass +towgs84=${towgs84} +units=m +no_defs`;
+                statusEl.innerText = `✅ Ділянка: ${cadnum}\nВикористано: УСК-2000 (Зона ${zone})`;
+            } 
+            else { 
+                let zone = Math.floor(firstY / 1000000);
+                if (zone === 0) zone = 3; 
+                let L0 = 20.5 + 3.0 * zone;
+                let falseEasting = zone * 1000000 + 500000;
+                projFrom = `+proj=tmerc +lat_0=0 +lon_0=${L0} +k=1 +x_0=${falseEasting} +y_0=0 +ellps=krass +towgs84=${towgs84} +units=m +no_defs`;
+                statusEl.innerText = `✅ Ділянка: ${cadnum}\nВикористано: СК-63 (Зона ${zone})`;
+            }
+
+            let projTo = "+proj=longlat +datum=WGS84 +no_defs";
+            let kmlCoords = "";
+
+            points.forEach(pt => {
+                let coords = proj4(projFrom, projTo, [Number(pt[0]), Number(pt[1])]);
+                currentWgs84Points.push({lon: coords[0], lat: coords[1]});
+                kmlCoords += `${coords[0].toFixed(7)},${coords[1].toFixed(7)},0 `;
+            });
+            
+            let firstPt = currentWgs84Points[0];
+            kmlCoords += `${firstPt.lon.toFixed(7)},${firstPt.lat.toFixed(7)},0`;
+
+            currentKmlContent = `<?xml version="1.0" encoding="UTF-8"?>
+<kml xmlns="http://www.opengis.net/kml/2.2">
+  <Document><name>${cadnum}.kml</name><Placemark><name>${cadnum}</name>
+  <Style><LineStyle><color>ff0000ff</color><width>3</width></LineStyle><PolyStyle><color>4d0000ff</color></PolyStyle></Style>
+  <Polygon><outerBoundaryIs><LinearRing><coordinates>${kmlCoords}</coordinates></LinearRing></outerBoundaryIs></Polygon>
+  </Placemark></Document></kml>`;
+        } catch (e) {
+            statusEl.innerText += "\n⚠️ Помилка координат: " + e.message;
+        }
+    }
+
+    // Звичайна біла схема
+    const size = 1200, pad = 180;
     ctx.fillStyle = "#ffffff";
     ctx.fillRect(0, 0, size, size);
 
-    const ys = points.map(p => p[0]);
-    const xs = points.map(p => p[1]);
-    const minY = Math.min(...ys), maxY = Math.max(...ys);
-    const minX = Math.min(...xs), maxX = Math.max(...xs);
-
-    const spanY = Math.max(maxY - minY, 0.001);
-    const spanX = Math.max(maxX - minX, 0.001);
+    const ys = points.map(p => p[0]), xs = points.map(p => p[1]);
+    const minY = Math.min(...ys), maxY = Math.max(...ys), minX = Math.min(...xs), maxX = Math.max(...xs);
+    const spanY = Math.max(maxY - minY, 0.001), spanX = Math.max(maxX - minX, 0.001);
     const scale = (size - 2 * pad) / Math.max(spanY, spanX);
-
-    const offsetX = (size - spanY * scale) / 2;
-    const offsetY = (size - spanX * scale) / 2;
+    const offsetX = (size - spanY * scale) / 2, offsetY = (size - spanX * scale) / 2;
 
     const pxPts = points.map(p => ({
-        x: offsetX + (p[0] - minY) * scale,
-        y: size - (offsetY + (p[1] - minX) * scale)
+        x: offsetX + (p[0] - minY) * scale, y: size - (offsetY + (p[1] - minX) * scale)
     }));
 
     ctx.beginPath();
     ctx.moveTo(pxPts[0].x, pxPts[0].y);
-    for (let i = 1; i < pxPts.length; i++) {
-        ctx.lineTo(pxPts[i].x, pxPts[i].y);
-    }
+    for (let i = 1; i < pxPts.length; i++) ctx.lineTo(pxPts[i].x, pxPts[i].y);
     ctx.closePath();
-    ctx.strokeStyle = "#14213d";
-    ctx.lineWidth = 4;
-    ctx.stroke();
+    ctx.strokeStyle = "#14213d"; ctx.lineWidth = 4; ctx.stroke();
 
     const centerX = pxPts.reduce((s, p) => s + p.x, 0) / pxPts.length;
     const centerY = pxPts.reduce((s, p) => s + p.y, 0) / pxPts.length;
 
-    ctx.fillStyle = "#000000";
-    ctx.font = "28px 'Courier New', monospace";
-    ctx.textAlign = "center";
-    ctx.textBaseline = "middle";
+    ctx.fillStyle = "#000000"; ctx.font = "28px 'Courier New', monospace";
+    ctx.textAlign = "center"; ctx.textBaseline = "middle";
     ctx.fillText(cadnum, centerX, centerY);
 
     pxPts.forEach((pt, idx) => {
         const s = 7;
-        ctx.fillStyle = "#ffffff";
-        ctx.fillRect(pt.x - s, pt.y - s, s * 2, s * 2);
-        ctx.strokeStyle = "#14213d";
-        ctx.lineWidth = 2.5;
-        ctx.strokeRect(pt.x - s, pt.y - s, s * 2, s * 2);
-
-        const dx = pt.x - centerX;
-        const dy = pt.y - centerY;
+        ctx.fillStyle = "#ffffff"; ctx.fillRect(pt.x - s, pt.y - s, s * 2, s * 2);
+        ctx.strokeStyle = "#14213d"; ctx.lineWidth = 2.5; ctx.strokeRect(pt.x - s, pt.y - s, s * 2, s * 2);
+        const dx = pt.x - centerX, dy = pt.y - centerY;
         const dist = Math.max(Math.hypot(dx, dy), 1);
-        const tx = pt.x + (dx / dist) * 32;
-        const ty = pt.y + (dy / dist) * 32;
-
-        ctx.fillStyle = "#000000";
-        ctx.font = "28px 'Courier New', monospace";
-        ctx.fillText(String(idx + 1), tx, ty);
+        ctx.fillStyle = "#000000"; ctx.fillText(String(idx + 1), pt.x + (dx/dist)*32, pt.y + (dy/dist)*32);
     });
 
-    // ПРАВИЛЬНИЙ ФОРМАТ: image/jpeg 
-    const rawJpgBase64 = canvas.toDataURL("image/jpeg", 0.95).split(',')[1];
-    currentJpgBase64 = `df:${currentBaseName}.jpg;data:image/jpeg;base64,` + rawJpgBase64;
-
+    currentJpgBase64 = `df:${currentBaseName}.jpg;data:image/jpeg;base64,` + canvas.toDataURL("image/jpeg", 0.95).split(',')[1];
     canvas.style.display = "block";
     document.getElementById('actionButtons').style.display = "block";
-    statusEl.innerText = `✅ Створено: ${currentBaseName}.txt та .jpg!`;
 }
 
-function utf8ToBase64(str) {
-    return window.btoa(unescape(encodeURIComponent(str)));
+// === ЛОГІКА СУПУТНИКОВОЇ КАРТИ ===
+function lon2tileX(lon, zoom) { return ((lon + 180) / 360) * Math.pow(2, zoom); }
+function lat2tileY(lat, zoom) { return ((1 - Math.log(Math.tan(lat * Math.PI/180) + 1 / Math.cos(lat * Math.PI/180)) / Math.PI) / 2) * Math.pow(2, zoom); }
+
+function loadTile(z, x, y) {
+    return new Promise((resolve) => {
+        let img = new Image();
+        img.crossOrigin = "Anonymous";
+        img.onload = () => resolve({img, x, y});
+        img.onerror = () => resolve(null); // Пропускаємо биті тайли
+        img.src = `https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/${z}/${y}/${x}`;
+    });
 }
 
-// ПРАВИЛЬНИЙ ФОРМАТ: text/plain
+document.getElementById('shareSatBtn').onclick = async function() {
+    if (currentWgs84Points.length === 0) {
+        alert("Неможливо згенерувати супутник: помилка координат (перевірте систему координат).");
+        return;
+    }
+
+    const prevStatus = statusEl.innerText;
+    statusEl.innerText = "⏳ Завантаження супутникових знімків ArcGIS... (це може зайняти пару секунд)";
+    this.disabled = true;
+
+    try {
+        const zoom = parseInt(document.getElementById('zoomSelect').value);
+        const cLon = currentWgs84Points.reduce((s, p) => s + p.lon, 0) / currentWgs84Points.length;
+        const cLat = currentWgs84Points.reduce((s, p) => s + p.lat, 0) / currentWgs84Points.length;
+
+        const cTileX = lon2tileX(cLon, zoom);
+        const cTileY = lat2tileY(cLat, zoom);
+        
+        const size = 1200;
+        const halfSize = size / 2;
+        
+        // Визначаємо межі тайлів, які потрібно завантажити
+        const minTX = Math.floor((cTileX * 256 - halfSize) / 256);
+        const maxTX = Math.floor((cTileX * 256 + halfSize) / 256);
+        const minTY = Math.floor((cTileY * 256 - halfSize) / 256);
+        const maxTY = Math.floor((cTileY * 256 + halfSize) / 256);
+
+        let promises = [];
+        for (let tx = minTX; tx <= maxTX; tx++) {
+            for (let ty = minTY; ty <= maxTY; ty++) {
+                promises.push(loadTile(zoom, tx, ty));
+            }
+        }
+
+        const tiles = await Promise.all(promises);
+
+        satCtx.fillStyle = "#1e1e1e";
+        satCtx.fillRect(0, 0, size, size);
+
+        // Малюємо тайли
+        tiles.forEach(t => {
+            if (t) {
+                let pxX = (t.x * 256) - (cTileX * 256 - halfSize);
+                let pxY = (t.y * 256) - (cTileY * 256 - halfSize);
+                satCtx.drawImage(t.img, pxX, pxY, 256, 256);
+            }
+        });
+
+        // Накладаємо ділянку
+        let satPts = currentWgs84Points.map(p => {
+            let ptTileX = lon2tileX(p.lon, zoom);
+            let ptTileY = lat2tileY(p.lat, zoom);
+            return {
+                x: (ptTileX * 256) - (cTileX * 256 - halfSize),
+                y: (ptTileY * 256) - (cTileY * 256 - halfSize)
+            };
+        });
+
+        satCtx.beginPath();
+        satCtx.moveTo(satPts[0].x, satPts[0].y);
+        for (let i = 1; i < satPts.length; i++) satCtx.lineTo(satPts[i].x, satPts[i].y);
+        satCtx.closePath();
+
+        // Червоний контур з напівпрозорою заливкою
+        satCtx.fillStyle = "rgba(255, 0, 0, 0.25)";
+        satCtx.fill();
+        satCtx.strokeStyle = "#ff0000";
+        satCtx.lineWidth = 4;
+        satCtx.stroke();
+
+        // Текст із білою обводкою для читабельності на супутнику
+        satCtx.font = "bold 26px 'Courier New', monospace";
+        satCtx.textAlign = "center";
+        satCtx.textBaseline = "middle";
+
+        satCtx.lineWidth = 4;
+        satCtx.strokeStyle = "#ffffff";
+        satCtx.strokeText(currentBaseName, halfSize, halfSize);
+        satCtx.fillStyle = "#ff0000";
+        satCtx.fillText(currentBaseName, halfSize, halfSize);
+
+        satPts.forEach((pt, idx) => {
+            const s = 6;
+            satCtx.fillStyle = "#ffffff";
+            satCtx.fillRect(pt.x - s, pt.y - s, s * 2, s * 2);
+            satCtx.strokeStyle = "#ff0000";
+            satCtx.lineWidth = 2;
+            satCtx.strokeRect(pt.x - s, pt.y - s, s * 2, s * 2);
+
+            const dx = pt.x - halfSize, dy = pt.y - halfSize;
+            const dist = Math.max(Math.hypot(dx, dy), 1);
+            const tx = pt.x + (dx/dist)*32;
+            const ty = pt.y + (dy/dist)*32;
+
+            satCtx.lineWidth = 4;
+            satCtx.strokeStyle = "#ffffff";
+            satCtx.strokeText(String(idx + 1), tx, ty);
+            satCtx.fillStyle = "#000000";
+            satCtx.fillText(String(idx + 1), tx, ty);
+        });
+
+        const satJpgBase64 = `df:${currentBaseName}_Sat.jpg;data:image/jpeg;base64,` + satCanvas.toDataURL("image/jpeg", 0.9).split(',')[1];
+        
+        canvas.style.display = "none";
+        satCanvas.style.display = "block";
+        statusEl.innerText = prevStatus + "\n✅ Супутникова схема згенерована!";
+
+        // Відкриваємо меню поділитися
+        if (window.plugins && window.plugins.socialsharing) {
+            window.plugins.socialsharing.shareWithOptions({
+                subject: currentBaseName + " Супутник",
+                files: [satJpgBase64]
+            });
+        } else {
+            fallbackShare(atob(satJpgBase64.split(',')[1]), "_Sat.jpg", "image/jpeg", true);
+        }
+
+    } catch (e) {
+        statusEl.innerText = prevStatus + "\n❌ Помилка завантаження супутника: " + e.message;
+    } finally {
+        this.disabled = false;
+    }
+};
+
+// === БАЗОВИЙ ЕКСПОРТ ===
+function utf8ToBase64(str) { return window.btoa(unescape(encodeURIComponent(str))); }
+
 document.getElementById('shareBothBtn').onclick = function() {
+    canvas.style.display = "block"; satCanvas.style.display = "none";
     const txtDataUrl = `df:${currentBaseName}.txt;data:text/plain;base64,` + utf8ToBase64(currentTxtContent);
     if (window.plugins && window.plugins.socialsharing) {
-        window.plugins.socialsharing.shareWithOptions({
-            subject: currentBaseName,
-            files: [txtDataUrl, currentJpgBase64]
-        });
-    } else {
-        fallbackShare();
-    }
+        window.plugins.socialsharing.shareWithOptions({ subject: currentBaseName, files: [txtDataUrl, currentJpgBase64] });
+    } else { fallbackShare(currentTxtContent, ".txt", "text/plain"); }
 };
 
-document.getElementById('shareTxtBtn').onclick = function() {
-    const txtDataUrl = `df:${currentBaseName}.txt;data:text/plain;base64,` + utf8ToBase64(currentTxtContent);
+document.getElementById('shareKmlBtn').onclick = function() {
+    if (!currentKmlContent) return;
+    const kmlDataUrl = `df:${currentBaseName}.kml;data:application/vnd.google-earth.kml+xml;base64,` + utf8ToBase64(currentKmlContent);
     if (window.plugins && window.plugins.socialsharing) {
-        window.plugins.socialsharing.shareWithOptions({
-            subject: currentBaseName + ".txt",
-            files: [txtDataUrl]
-        });
+        window.plugins.socialsharing.shareWithOptions({ subject: currentBaseName + ".kml", files: [kmlDataUrl] });
+    } else { fallbackShare(currentKmlContent, ".kml", "application/vnd.google-earth.kml+xml"); }
+};
+
+function fallbackShare(content, ext, mimeType, isBase64 = false) {
+    let blob;
+    if (isBase64) {
+        const byteNumbers = new Array(content.length);
+        for (let i = 0; i < content.length; i++) byteNumbers[i] = content.charCodeAt(i);
+        blob = new Blob([new Uint8Array(byteNumbers)], {type: mimeType});
     } else {
-        fallbackShare();
+        blob = new Blob([content], { type: mimeType + ";charset=utf-8" });
     }
-};
-
-document.getElementById('copyTxtBtn').onclick = function() {
-    const txtArea = document.getElementById('txtPreview');
-    txtArea.select();
-    document.execCommand('copy');
-    statusEl.innerText = "✅ Координати скопійовано в буфер обміну!";
-};
-
-function fallbackShare() {
-    const blob = new Blob([currentTxtContent], { type: "text/plain;charset=utf-8" });
     const a = document.createElement("a");
     a.href = URL.createObjectURL(blob);
-    a.download = currentBaseName + ".txt";
+    a.download = currentBaseName + ext;
     a.click();
 }
 </script>
