@@ -28,8 +28,7 @@
         .crs-select {
             width: 100%;
             padding: 12px;
-            margin-bottom: 12px;
-            font-size: 15px;
+            font-size: 14px;
             font-weight: bold;
             color: #14213d;
             background-color: #eef4f8;
@@ -78,18 +77,18 @@
             border: 1px solid #ccc;
             border-radius: 8px;
             margin-bottom: 10px;
+            background: #fff;
         }
         textarea {
             width: 100%;
             box-sizing: border-box;
             height: 90px;
-            margin-top: 10px;
+            margin-top: 5px;
             font-family: monospace;
             font-size: 13px;
             padding: 8px;
             border: 1px solid #ccc;
             border-radius: 8px;
-            display: none;
         }
         .actions { display: none; margin-top: 12px; }
         
@@ -110,20 +109,50 @@
             border-bottom: 2px solid #eef4f8;
             padding-bottom: 4px;
         }
+        
+        .setup-box {
+            background: #f8f9fa;
+            padding: 12px;
+            border-radius: 8px;
+            margin-bottom: 15px;
+            text-align: left;
+            border: 1px solid #ddd;
+        }
+        .text-input {
+            width: 100%;
+            padding: 10px;
+            box-sizing: border-box;
+            border: 1px solid #1d6fa5;
+            border-radius: 6px;
+            font-size: 14px;
+            margin-top: 5px;
+            font-weight: bold;
+        }
     </style>
 </head>
 <body>
 
 <div class="card">
-    <h2>Кадастр (RTK + Супутник + Google Earth)</h2>
+    <h2>Конвертер ДЗК (RTK + Google Earth)</h2>
     
-    <select id="crsSelect" class="crs-select">
-        <option value="SC63" selected>🌐 Система: СК-63 (Основна для ДЗК)</option>
-        <option value="MSK">📌 МСК (Місцева за кадастровим номером)</option>
-        <option value="USK2000">📌 УСК-2000 (Зона за координатою Y)</option>
-    </select>
+    <!-- Професійний ручний контроль -->
+    <div class="setup-box">
+        <label style="font-size:13px; font-weight:bold;">Назва файлу / Кадастровий номер:</label>
+        <input type="text" id="cadnumInput" class="text-input" placeholder="Введіть назву..." style="margin-bottom:10px;">
+        
+        <label style="font-size:13px; font-weight:bold; display:block;">Проекція та Осьовий меридіан (L0):</label>
+        <div style="display:flex; gap:8px; margin-top:5px;">
+            <select id="crsBase" class="text-input" style="width:60%; margin-top:0;">
+                <option value="SC63">СК-63</option>
+                <option value="MSK">МСК</option>
+                <option value="USK2000">УСК-2000</option>
+            </select>
+            <input type="number" id="l0Input" class="text-input" style="width:40%; margin-top:0;" step="0.1" placeholder="L0 (напр. 29.5)">
+        </div>
+        <button class="btn btn-dark" id="recalcBtn" style="margin-top:10px; font-size:14px;">🔄 Застосувати зміни</button>
+    </div>
     
-    <label class="btn" for="fileInput">📂 1. Обрати JSON файл кадастру</label>
+    <label class="btn btn-green" for="fileInput">📂 1. Обрати JSON файл кадастру</label>
     <input type="file" id="fileInput" accept="*/*">
 
     <div id="status">Очікування вибору файлу...</div>
@@ -149,7 +178,7 @@
         <button class="btn btn-purple" id="shareSatBtn">🛰️ Згенерувати і Надіслати Супутник</button>
     </div>
 
-    <!-- Блок відображення -->
+    <!-- Блок відображення (каскадом вниз) -->
     <div id="displayArea" style="display: none; margin-top: 20px;">
         <div class="section-title">Каталог координат:</div>
         <textarea id="txtPreview" readonly></textarea>
@@ -169,7 +198,7 @@
 let currentTxtContent = "";
 let currentSchemaBase64 = "";
 let currentKmlContent = "";
-let currentBaseName = "unknown";
+let currentBaseName = "Dilyanka";
 let currentWgs84Points = [];
 let lastGeoJSON = null;
 
@@ -181,7 +210,6 @@ const statusEl = document.getElementById('status');
 const displayArea = document.getElementById('displayArea');
 const satContainer = document.getElementById('satContainer');
 
-// Словник осьових меридіанів МСК
 const mskL0 = {
     '01':34.5, '05':28.5, '07':25.5, '12':34.5, '14':37.5,
     '18':28.5, '21':22.5, '23':34.5, '26':25.5, '32':31.5,
@@ -191,10 +219,6 @@ const mskL0 = {
     '80':31.5, '85':34.5
 };
 
-document.getElementById('crsSelect').addEventListener('change', function() {
-    if (lastGeoJSON) processGeoJSON(lastGeoJSON);
-});
-
 document.getElementById('fileInput').addEventListener('change', function(e) {
     const file = e.target.files[0];
     if (!file) return;
@@ -203,7 +227,7 @@ document.getElementById('fileInput').addEventListener('change', function(e) {
         try {
             lastGeoJSON = JSON.parse(evt.target.result);
             satContainer.style.display = "none"; 
-            processGeoJSON(lastGeoJSON);
+            processGeoJSON(lastGeoJSON, false);
         } catch (err) {
             statusEl.innerText = "❌ Помилка читання JSON: " + err.message;
         }
@@ -211,46 +235,79 @@ document.getElementById('fileInput').addEventListener('change', function(e) {
     reader.readAsText(file);
 });
 
+// Кнопка примусового перерахунку
+document.getElementById('recalcBtn').addEventListener('click', function() {
+    if (!lastGeoJSON) {
+        alert("Спочатку завантажте JSON файл!");
+        return;
+    }
+    satContainer.style.display = "none";
+    processGeoJSON(lastGeoJSON, true);
+    statusEl.innerText += "\n🔄 Перерахунок виконано успішно!";
+});
+
+// Зміна підказки L0 при виборі системи
+document.getElementById('crsBase').addEventListener('change', function() {
+    if (!lastGeoJSON) return;
+    let extracted = extractGeoData(lastGeoJSON);
+    let firstY = Number(extracted.points[0][0]);
+    let zone = Math.floor(firstY / 1000000);
+    if (zone === 0) zone = 3;
+    let regionCode = document.getElementById('cadnumInput').value.substring(0, 2);
+    
+    if (this.value === "SC63") document.getElementById('l0Input').value = (17.5 + 3.0 * zone).toFixed(1);
+    else if (this.value === "USK2000") document.getElementById('l0Input').value = (21.0 + 3.0 * (zone - 1)).toFixed(1);
+    else if (this.value === "MSK") document.getElementById('l0Input').value = (mskL0[regionCode] || 28.5).toFixed(1);
+});
+
 function extractGeoData(data) {
-    let cadnum = "unknown";
+    let cadnum = "";
     let coords = null;
     
     if (data.type === "FeatureCollection" && data.features && data.features.length > 0) {
         let props = data.features[0].properties || {};
-        cadnum = props.cadnum || props.cadNum || props.cad_num || props.kad_nom || "unknown";
+        cadnum = props.cadnum || props.cadNum || props.cad_num || props.kad_nom || "";
         coords = data.features[0].geometry.coordinates;
     } else if (data.type === "Feature") {
         let props = data.properties || {};
-        cadnum = props.cadnum || props.cadNum || props.cad_num || props.kad_nom || "unknown";
+        cadnum = props.cadnum || props.cadNum || props.cad_num || props.kad_nom || "";
         coords = data.geometry.coordinates;
     } else {
         let props = data.properties || {};
-        cadnum = props.cadnum || props.cadNum || props.cad_num || props.kad_nom || "unknown";
+        cadnum = props.cadnum || props.cadNum || props.cad_num || props.kad_nom || "";
         coords = data.coordinates;
     }
 
     let points = coords;
-    while (points && points.length > 0 && Array.isArray(points[0]) && Array.isArray(points[0][0]) && Array.isArray(points[0][0][0])) {
-        points = points[0];
-    }
-    if (points && points.length > 0 && Array.isArray(points[0]) && Array.isArray(points[0][0])) {
-        points = points[0];
-    }
+    while (points && points.length > 0 && Array.isArray(points[0]) && Array.isArray(points[0][0]) && Array.isArray(points[0][0][0])) points = points[0];
+    if (points && points.length > 0 && Array.isArray(points[0]) && Array.isArray(points[0][0])) points = points[0];
+    
     return { cadnum, points };
 }
 
-function processGeoJSON(data) {
+function processGeoJSON(data, isRecalc) {
     let extracted = extractGeoData(data);
     let points = extracted.points;
-    let cadnum = extracted.cadnum;
 
     if (!points || points.length < 3) {
         statusEl.innerText = "❌ Не знайдено координат ділянки у файлі.";
         return;
     }
 
-    currentBaseName = cadnum.replace(/:/g, "");
-    if (currentBaseName === "unknown") currentBaseName = "Dilyanka";
+    // При першому завантаженні заповнюємо інпути
+    if (!isRecalc) {
+        document.getElementById('cadnumInput').value = extracted.cadnum !== "" ? extracted.cadnum : "Dilyanka";
+        document.getElementById('crsBase').value = "SC63";
+        let firstY = Number(points[0][0]);
+        let zone = Math.floor(firstY / 1000000);
+        if (zone === 0) zone = 3;
+        document.getElementById('l0Input').value = (17.5 + 3.0 * zone).toFixed(1);
+    }
+
+    // Беремо назву з текстового поля!
+    let rawName = document.getElementById('cadnumInput').value.trim();
+    if (rawName === "") rawName = "Dilyanka";
+    currentBaseName = rawName.replace(/[:\\/*?"<>|]/g, "_"); // Безпечне ім'я файлу
 
     if (points.length > 1) {
         const first = points[0], last = points[points.length - 1];
@@ -264,44 +321,30 @@ function processGeoJSON(data) {
     });
     currentTxtContent = txtLines.join("\r\n") + "\r\n";
     document.getElementById('txtPreview').value = currentTxtContent;
-    document.getElementById('txtPreview').style.display = "block";
 
-    // 2. Визначаємо систему координат (СК-63 за замовчуванням)
-    let activeSys = document.getElementById('crsSelect').value;
-    let regionCode = currentBaseName.substring(0, 2);
+    // 2. Геодезичний перерахунок з ручним контролем
+    let crs = document.getElementById('crsBase').value;
+    let L0 = Number(document.getElementById('l0Input').value) || 29.5;
 
     currentWgs84Points = [];
     if (typeof proj4 !== 'undefined') {
         try {
             let firstY = Number(points[0][0]);
-            let projFrom = "";
-            let towgs84 = "24,-123,-94,0.02,-0.25,-0.13,1.1"; 
             let zone = Math.floor(firstY / 1000000);
-            if (zone === 0) zone = 3; // Базовий запобіжник
+            
+            // Захист від обрізаної зони в Y (напр. 217093 замість 3217093)
+            let falseEasting = 500000;
+            if (crs === "MSK") {
+                falseEasting = (firstY > 1000000) ? zone * 1000000 + 300000 : 300000;
+            } else {
+                falseEasting = (firstY > 1000000) ? zone * 1000000 + 500000 : 500000;
+            }
 
-            if (activeSys === "SC63") {
-                // ПРАВИЛЬНА ФОРМУЛА ДЛЯ СК-63
-                let L0 = 20.5 + 3.0 * zone;
-                let falseEasting = zone * 1000000 + 500000;
-                projFrom = `+proj=tmerc +lat_0=0 +lon_0=${L0} +k=1 +x_0=${falseEasting} +y_0=0 +ellps=krass +towgs84=${towgs84} +units=m +no_defs`;
-                statusEl.innerText = `✅ Кад. номер: ${cadnum}\n⚙️ Система: СК-63 (Зона ${zone}, L0=${L0})`;
-            } 
-            else if (activeSys === "MSK") {
-                let L0 = mskL0[regionCode] || 28.5;
-                let falseEasting = (firstY > 1000000) ? Math.floor(firstY / 1000000) * 1000000 + 300000 : 300000;
-                projFrom = `+proj=tmerc +lat_0=0 +lon_0=${L0} +k=1 +x_0=${falseEasting} +y_0=0 +ellps=krass +towgs84=${towgs84} +units=m +no_defs`;
-                statusEl.innerText = `✅ Кад. номер: ${cadnum}\n⚙️ Система: МСК (Обл. ${regionCode}, L0=${L0})`;
-            } 
-            else if (activeSys === "USK2000") {
-                let L0 = 21.0 + 3.0 * (zone - 1);
-                let falseEasting = zone * 1000000 + 500000;
-                projFrom = `+proj=tmerc +lat_0=0 +lon_0=${L0} +k=1 +x_0=${falseEasting} +y_0=0 +ellps=krass +towgs84=${towgs84} +units=m +no_defs`;
-                statusEl.innerText = `✅ Кад. номер: ${cadnum}\n⚙️ Система: УСК-2000 (Зона ${zone}, L0=${L0})`;
-            } 
-
+            let towgs84 = "24,-123,-94,0.02,-0.25,-0.13,1.1"; 
+            let projFrom = `+proj=tmerc +lat_0=0 +lon_0=${L0} +k=1 +x_0=${falseEasting} +y_0=0 +ellps=krass +towgs84=${towgs84} +units=m +no_defs`;
             let projTo = "+proj=longlat +datum=WGS84 +no_defs";
+            
             let kmlCoords = "";
-
             points.forEach(pt => {
                 let coords = proj4(projFrom, projTo, [Number(pt[0]), Number(pt[1])]);
                 currentWgs84Points.push({lon: coords[0], lat: coords[1]});
@@ -312,16 +355,18 @@ function processGeoJSON(data) {
 
             currentKmlContent = `<?xml version="1.0" encoding="UTF-8"?>
 <kml xmlns="http://www.opengis.net/kml/2.2">
-  <Document><name>${cadnum}</name><Placemark><name>${cadnum}</name>
+  <Document><name>${currentBaseName}</name><Placemark><name>${currentBaseName}</name>
   <Style><LineStyle><color>ff0000ff</color><width>3</width></LineStyle><PolyStyle><color>4d0000ff</color></PolyStyle></Style>
   <Polygon><outerBoundaryIs><LinearRing><coordinates>${kmlCoords}</coordinates></LinearRing></outerBoundaryIs></Polygon>
   </Placemark></Document></kml>`;
+            
+            statusEl.innerText = `✅ Успіх! Назва: ${rawName}\n⚙️ L0: ${L0}°, False Easting: ${falseEasting}`;
         } catch (e) {
-            statusEl.innerText += "\n⚠️ Помилка координат: " + e.message;
+            statusEl.innerText = "⚠️ Помилка координат: " + e.message;
         }
     }
 
-    // 3. Малюємо Білу Схему
+    // 3. Малюємо Білу Схему (JPG)
     const size = 1200, pad = 180;
     ctx.fillStyle = "#ffffff"; ctx.fillRect(0, 0, size, size);
 
@@ -346,7 +391,7 @@ function processGeoJSON(data) {
 
     ctx.fillStyle = "#000000"; ctx.font = "bold 28px 'Courier New', monospace";
     ctx.textAlign = "center"; ctx.textBaseline = "middle";
-    ctx.fillText(cadnum, centerX, centerY);
+    ctx.fillText(rawName, centerX, centerY);
 
     pxPts.forEach((pt, idx) => {
         const s = 7;
@@ -383,7 +428,7 @@ document.getElementById('shareSatBtn').onclick = async function() {
         return;
     }
     const prevStatus = statusEl.innerText;
-    statusEl.innerText = "⏳ Завантаження супутникових знімків... (зачекайте пару секунд)";
+    statusEl.innerText = "⏳ Завантаження супутникових знімків...";
     this.disabled = true;
 
     try {
@@ -434,9 +479,10 @@ document.getElementById('shareSatBtn').onclick = async function() {
         satCtx.font = "bold 26px 'Courier New', monospace";
         satCtx.textAlign = "center"; satCtx.textBaseline = "middle";
         satCtx.lineWidth = 4; satCtx.strokeStyle = "#ffffff";
-        let titleTxt = currentBaseName === "Dilyanka" ? "Ділянка" : currentBaseName;
-        satCtx.strokeText(titleTxt, halfSize, halfSize);
-        satCtx.fillStyle = "#ff0000"; satCtx.fillText(titleTxt, halfSize, halfSize);
+        
+        let rawName = document.getElementById('cadnumInput').value.trim() || "Dilyanka";
+        satCtx.strokeText(rawName, halfSize, halfSize);
+        satCtx.fillStyle = "#ff0000"; satCtx.fillText(rawName, halfSize, halfSize);
 
         satPts.forEach((pt, idx) => {
             const s = 6;
@@ -450,14 +496,13 @@ document.getElementById('shareSatBtn').onclick = async function() {
         });
 
         let b64 = satCanvas.toDataURL("image/jpeg", 0.9).split(',')[1];
-        
         satContainer.style.display = "block";
-        statusEl.innerText = prevStatus + "\n✅ Супутник згенеровано!";
+        statusEl.innerText = prevStatus.split('\n')[0] + "\n✅ Супутник згенеровано успішно!";
 
         shareNative(b64, "_Sat.jpg", "image/jpeg");
 
     } catch (e) {
-        statusEl.innerText = prevStatus + "\n❌ Помилка: " + e.message;
+        statusEl.innerText = "❌ Помилка супутника: " + e.message;
     } finally {
         this.disabled = false;
     }
@@ -478,12 +523,8 @@ function shareNative(base64Data, extension, mimeType) {
     }
 }
 
-document.getElementById('shareTxtBtn').onclick = function() {
-    shareNative(utf8ToBase64(currentTxtContent), ".txt", "text/plain");
-};
-document.getElementById('shareSchemaBtn').onclick = function() {
-    shareNative(currentSchemaBase64, ".jpg", "image/jpeg");
-};
+document.getElementById('shareTxtBtn').onclick = function() { shareNative(utf8ToBase64(currentTxtContent), ".txt", "text/plain"); };
+document.getElementById('shareSchemaBtn').onclick = function() { shareNative(currentSchemaBase64, ".jpg", "image/jpeg"); };
 document.getElementById('shareKmlBtn').onclick = function() {
     if (!currentKmlContent) return;
     shareNative(utf8ToBase64(currentKmlContent), ".kml", "application/vnd.google-earth.kml+xml");
