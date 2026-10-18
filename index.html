@@ -143,6 +143,21 @@
             margin-top: 4px;
             font-weight: bold;
         }
+        .sat-box {
+            background: #f8f5fd;
+            border: 1px solid #d8c8f0;
+            padding: 12px;
+            border-radius: 10px;
+            margin-top: 12px;
+            text-align: left;
+        }
+        .sat-box label {
+            font-size: 13px;
+            font-weight: bold;
+            color: #3d2661;
+            display: block;
+            margin-bottom: 4px;
+        }
     </style>
 </head>
 <body>
@@ -189,16 +204,31 @@
             <button class="btn btn-blue" id="shareKmlBtn">🌍 KML (Earth)</button>
         </div>
         
-        <hr style="margin:15px 0; border:0; border-top:1px solid #ddd;">
-        
-        <select id="zoomSelect" class="crs-select" style="margin-bottom:8px; border-color:#6a4c93; background-color:#f8f5fd;">
-            <option value="19">🛰️ Масштаб: ~1:500 (Крупно, 19 zoom)</option>
-            <option value="18">🛰️ Масштаб: ~1:1000 (Ділянка, 18 zoom)</option>
-            <option value="17" selected>🛰️ Масштаб: ~1:2000 (Сусіди, 17 zoom)</option>
-            <option value="15">🛰️ Масштаб: ~1:8000 (Поле/Масив, 15 zoom)</option>
-            <option value="13">🛰️ Масштаб: ~1:30000 (Село/Район, 13 zoom)</option>
-        </select>
-        <button class="btn btn-purple" id="shareSatBtn">🛰️ Згенерувати і Надіслати Супутник</button>
+        <div class="sat-box">
+            <label>Картографічна підложка (Супутник / Гібрид / Карта):</label>
+            <select id="mapSourceSelect" class="crs-select" style="margin-bottom:10px; border-color:#6a4c93; background-color:#ffffff;">
+                <option value="arcgis_hybrid" selected>🛰️ ArcGIS Гібрид (Супутник + Вулиці/Села)</option>
+                <option value="arcgis_sat">🛰️ ArcGIS Супутник (Чистий знімок)</option>
+                <option value="google_hybrid">🌍 Google Гібрид (Супутник + Вулиці)</option>
+                <option value="google_sat">🌍 Google Супутник (Чистий знімок)</option>
+                <option value="osm">🗺️ OpenStreetMap (Карта вулиць і доріг)</option>
+                <option value="opentopo">⛰️ OpenTopoMap (Топокарта з рельєфом)</option>
+                <option value="carto_light">⬜ CartoDB Positron (Світла схема)</option>
+            </select>
+
+            <label>Масштаб знімка / карти:</label>
+            <select id="zoomSelect" class="crs-select" style="margin-bottom:10px; border-color:#6a4c93; background-color:#ffffff;">
+                <option value="20">🔍 ~1:200 (Макс. наближення, 20 zoom + Overzoom)</option>
+                <option value="19">🔍 ~1:500 (Крупно, 19 zoom + Overzoom)</option>
+                <option value="18">🔍 ~1:1000 (Ділянка, 18 zoom)</option>
+                <option value="17" selected>🔍 ~1:2000 (Сусіди, 17 zoom)</option>
+                <option value="16">🔍 ~1:4000 (Вулиця/Поле, 16 zoom)</option>
+                <option value="15">🔍 ~1:8000 (Квартал/Масив, 15 zoom)</option>
+                <option value="13">🔍 ~1:30000 (Село/Район, 13 zoom)</option>
+            </select>
+
+            <button class="btn btn-purple" id="shareSatBtn" style="margin-bottom:0;">🛰️ Згенерувати і Надіслати Карту (JPG)</button>
+        </div>
     </div>
 
     <div id="displayArea" style="display: none; margin-top: 20px;">
@@ -209,7 +239,7 @@
         <canvas id="plotCanvas" width="1200" height="1200"></canvas>
         
         <div id="satContainer" style="display: none;">
-            <div class="section-title">Супутникова схема:</div>
+            <div class="section-title">Схема на підложці:</div>
             <canvas id="satCanvas" width="1200" height="1200"></canvas>
         </div>
     </div>
@@ -415,7 +445,6 @@ function calcPolygonAreaHa(pts) {
     return Math.abs(sum) / 2.0 / 10000.0;
 }
 
-// Допоміжна функція для автоматичного переносу довгих рядків на Canvas
 function wrapCanvasText(context, text, maxWidth) {
     const words = text.split(' ');
     let lines = [];
@@ -602,12 +631,11 @@ function processGeoJSON(data, isNewFile) {
         }
     }
 
-    // 3. Малюємо Білу Схему (JPG) з окремим інфоблоком знизу (без накладання на ділянку!)
+    // 3. Малюємо Білу Схему (JPG) з окремим інфоблоком знизу
     const width = 1200;
-    const plotAreaHeight = 960; // Верхня зона виключно під графіку ділянки та номери точок
-    const plotPad = 120;        // Відступ усередині графічної зони, щоб цифри точок не вилазили за межі
+    const plotAreaHeight = 960;
+    const plotPad = 120;
 
-    // Підготовка рядків для нижнього текстового блоку
     let rawDetailLines = [];
     if (parsedPdfMeta) {
         let areaLine = `Площа: ${ parsedPdfMeta.area ? parsedPdfMeta.area + ' га (за ДЗК) / ' : '' }${calcAreaHa.toFixed(4)} га (за коорд.)`;
@@ -622,7 +650,6 @@ function processGeoJSON(data, isNewFile) {
         rawDetailLines.push(`Площа за координатами: ${calcAreaHa.toFixed(4)} га | Кількість точок: ${normPts.length}`);
     }
 
-    // Вимірюємо переноси довгих рядків
     ctx.font = "22px -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif";
     let wrappedDetails = [];
     const maxTextWidth = width - 120;
@@ -638,11 +665,9 @@ function processGeoJSON(data, isNewFile) {
     canvas.width = width;
     canvas.height = totalHeight;
 
-    // Білий фон на все полотно
     ctx.fillStyle = "#ffffff";
     ctx.fillRect(0, 0, width, totalHeight);
 
-    // Масштабування полігона суворо всередині верхньої зони (width x plotAreaHeight)
     const ys = normPts.map(p => p.eastY), xs = normPts.map(p => p.northX);
     const minY = Math.min(...ys), maxY = Math.max(...ys), minX = Math.min(...xs), maxX = Math.max(...xs);
     const spanY = Math.max(maxY - minY, 0.001), spanX = Math.max(maxX - minX, 0.001);
@@ -658,7 +683,6 @@ function processGeoJSON(data, isNewFile) {
         y: plotAreaHeight - (offsetY + (p.northX - minX) * scale)
     }));
 
-    // Контур ділянки (всередині полігона тепер чисто!)
     ctx.beginPath();
     ctx.moveTo(pxPts[0].x, pxPts[0].y);
     for (let i = 1; i < pxPts.length; i++) ctx.lineTo(pxPts[i].x, pxPts[i].y);
@@ -670,7 +694,6 @@ function processGeoJSON(data, isNewFile) {
     const centerX = pxPts.reduce((s, p) => s + p.x, 0) / pxPts.length;
     const centerY = pxPts.reduce((s, p) => s + p.y, 0) / pxPts.length;
 
-    // Точки та їх номери
     pxPts.forEach((pt, idx) => {
         const s = 7;
         ctx.fillStyle = "#ffffff";
@@ -688,7 +711,6 @@ function processGeoJSON(data, isNewFile) {
         ctx.fillText(String(idx + 1), pt.x + (dx / dist) * 32, pt.y + (dy / dist) * 32);
     });
 
-    // Горизонтальна лінія-розділювач перед нижнім інфоблоком
     ctx.beginPath();
     ctx.moveTo(60, plotAreaHeight);
     ctx.lineTo(width - 60, plotAreaHeight);
@@ -696,7 +718,6 @@ function processGeoJSON(data, isNewFile) {
     ctx.lineWidth = 2;
     ctx.stroke();
 
-    // 1-й рядок інфоблоку: Кадастровий номер (жирним шрифтом)
     let textY = plotAreaHeight + 42;
     ctx.fillStyle = "#000000";
     ctx.font = "bold 32px 'Courier New', monospace";
@@ -704,7 +725,6 @@ function processGeoJSON(data, isNewFile) {
     ctx.textBaseline = "middle";
     ctx.fillText(currentDisplayLabel, width / 2, textY);
 
-    // Наступні рядки інфоблоку: дрібним шрифтом
     textY += 44;
     ctx.fillStyle = "#222222";
     ctx.font = "22px -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif";
@@ -718,31 +738,129 @@ function processGeoJSON(data, isNewFile) {
     document.getElementById('actionButtons').style.display = "block";
 }
 
-// === ЛОГІКА СУПУТНИКОВОЇ КАРТИ ===
+// === ЛОГІКА КАРТОГРАФІЧНИХ ПІДЛОЖОК ТА СУПУТНИКА (З ПІДТРИМКОЮ ГІБРИДА ТА OVERZOOM ДО 1:200) ===
 function lon2tileX(lon, zoom) { return ((lon + 180) / 360) * Math.pow(2, zoom); }
 function lat2tileY(lat, zoom) { return ((1 - Math.log(Math.tan(lat * Math.PI/180) + 1 / Math.cos(lat * Math.PI/180)) / Math.PI) / 2) * Math.pow(2, zoom); }
 
-function loadTile(z, x, y) {
+// Формування URL для обраного провайдера карт
+function getTileUrl(provider, z, x, y) {
+    switch (provider) {
+        case 'arcgis_sat':
+        case 'arcgis_hybrid':
+            return `https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/${z}/${y}/${x}`;
+        case 'arcgis_labels':
+            return `https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/${z}/${y}/${x}`;
+        case 'arcgis_roads':
+            return `https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Transportation/MapServer/tile/${z}/${y}/${x}`;
+        case 'google_hybrid':
+            return `https://mt1.google.com/vt/lyrs=y&hl=uk&x=${x}&y=${y}&z=${z}`;
+        case 'google_sat':
+            return `https://mt1.google.com/vt/lyrs=s&hl=uk&x=${x}&y=${y}&z=${z}`;
+        case 'osm':
+            return `https://tile.openstreetmap.org/${z}/${x}/${y}.png`;
+        case 'opentopo':
+            return `https://tile.opentopomap.org/${z}/${x}/${y}.png`;
+        case 'carto_light':
+            return `https://a.basemaps.cartocdn.com/light_all/${z}/${x}/${y}.png`;
+        default:
+            return `https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/${z}/${y}/${x}`;
+    }
+}
+
+// Максимальний нативний зум для кожного джерела (вище нього автоматично вмикається Overzoom або перевірка заглушки)
+function getMaxNativeZoom(provider) {
+    if (provider === 'opentopo') return 17;
+    if (provider === 'osm') return 19;
+    return 20;
+}
+
+// Перевірка, чи є супутниковий тайл сірою заглушкою ("Map data not yet available")
+function isPlaceholderTile(img, provider) {
+    // Перевіряємо тільки супутникові шари (бо векторні карти самі по собі світло-сірі)
+    if (!provider.includes('arcgis') && !provider.includes('google')) return false;
+    try {
+        const testCanvas = document.createElement('canvas');
+        testCanvas.width = 64;
+        testCanvas.height = 64;
+        const tCtx = testCanvas.getContext('2d');
+        tCtx.drawImage(img, 0, 0, 64, 64);
+        const data = tCtx.getImageData(0, 0, 64, 64).data;
+
+        let colorDiffSum = 0;
+        let brightCount = 0;
+        const totalPixels = 64 * 64;
+
+        for (let i = 0; i < data.length; i += 4) {
+            const r = data[i], g = data[i + 1], b = data[i + 2];
+            colorDiffSum += Math.abs(r - g) + Math.abs(g - b) + Math.abs(r - b);
+            if (r > 195 && g > 195 && b > 195) brightCount++;
+        }
+        const avgColorDiff = colorDiffSum / totalPixels;
+        // Якщо тайл повністю сірий (без кольорів природи) і світлий — це заглушка відсутності знімка
+        return (avgColorDiff < 2.8 && (brightCount / totalPixels) > 0.78);
+    } catch (e) {
+        return false;
+    }
+}
+
+function loadRawTile(provider, z, x, y, checkPlaceholder = true) {
     return new Promise((resolve) => {
         let img = new Image();
         img.crossOrigin = "Anonymous";
-        img.onload = () => resolve({img, x, y});
+        img.onload = () => {
+            if (checkPlaceholder && isPlaceholderTile(img, provider)) {
+                resolve(null);
+            } else {
+                resolve(img);
+            }
+        };
         img.onerror = () => resolve(null);
-        img.src = `https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/${z}/${y}/${x}`;
+        img.src = getTileUrl(provider, z, x, y);
     });
+}
+
+// Завантаження тайла з автоматичним Overzoom (спускається до нижчого зуму, якщо на 19/20 немає даних, і вирізає потрібний квадрат)
+async function loadSmartTile(provider, targetZ, targetX, targetY, isOverlay = false) {
+    const startZ = Math.min(targetZ, getMaxNativeZoom(provider));
+    const minFallbackZ = isOverlay ? Math.max(13, targetZ - 3) : 14;
+
+    for (let z = startZ; z >= minFallbackZ; z--) {
+        const scaleDiff = Math.pow(2, targetZ - z);
+        const parentX = Math.floor(targetX / scaleDiff);
+        const parentY = Math.floor(targetY / scaleDiff);
+
+        const img = await loadRawTile(provider, z, parentX, parentY, !isOverlay);
+        if (img) {
+            const subSize = 256 / scaleDiff;
+            const srcX = (targetX % scaleDiff) * subSize;
+            const srcY = (targetY % scaleDiff) * subSize;
+            return {
+                img: img,
+                x: targetX,
+                y: targetY,
+                srcX: srcX,
+                srcY: srcY,
+                srcW: subSize,
+                srcH: subSize,
+                actualZoom: z
+            };
+        }
+    }
+    return null;
 }
 
 document.getElementById('shareSatBtn').onclick = async function() {
     if (currentWgs84Points.length === 0) {
-        alert("Неможливо згенерувати супутник: помилка координат.");
+        alert("Неможливо згенерувати карту: помилка координат.");
         return;
     }
-    const baseStatus = statusEl.innerText;
-    statusEl.innerText = "⏳ Завантаження супутникових знімків ArcGIS...";
+    const provider = document.getElementById('mapSourceSelect').value;
+    const zoom = parseInt(document.getElementById('zoomSelect').value);
+    const baseStatus = statusEl.innerText.split('\n✅ Карту')[0];
+    statusEl.innerText = "⏳ Завантаження тайлів підложки та генерація схеми...";
     this.disabled = true;
 
     try {
-        const zoom = parseInt(document.getElementById('zoomSelect').value);
         const cLon = currentWgs84Points.reduce((s, p) => s + p.lon, 0) / currentWgs84Points.length;
         const cLat = currentWgs84Points.reduce((s, p) => s + p.lat, 0) / currentWgs84Points.length;
         const cTileX = lon2tileX(cLon, zoom);
@@ -754,23 +872,61 @@ document.getElementById('shareSatBtn').onclick = async function() {
         const minTY = Math.floor((cTileY * 256 - halfSize) / 256);
         const maxTY = Math.floor((cTileY * 256 + halfSize) / 256);
 
-        let promises = [];
+        let basePromises = [];
+        let roadPromises = [];
+        let labelPromises = [];
+
         for (let tx = minTX; tx <= maxTX; tx++) {
-            for (let ty = minTY; ty <= maxTY; ty++) promises.push(loadTile(zoom, tx, ty));
+            for (let ty = minTY; ty <= maxTY; ty++) {
+                basePromises.push(loadSmartTile(provider, zoom, tx, ty, false));
+                // Якщо обрано Гібрид ArcGIS — підтягуємо прозорі шари доріг/вулиць та назв населених пунктів
+                if (provider === 'arcgis_hybrid') {
+                    roadPromises.push(loadSmartTile('arcgis_roads', zoom, tx, ty, true));
+                    labelPromises.push(loadSmartTile('arcgis_labels', zoom, tx, ty, true));
+                }
+            }
         }
-        const tiles = await Promise.all(promises);
+
+        const baseTiles = await Promise.all(basePromises);
+        const roadTiles = provider === 'arcgis_hybrid' ? await Promise.all(roadPromises) : [];
+        const labelTiles = provider === 'arcgis_hybrid' ? await Promise.all(labelPromises) : [];
         
         satCtx.fillStyle = "#1e1e1e";
         satCtx.fillRect(0, 0, size, size);
+        satCtx.imageSmoothingEnabled = true;
+        satCtx.imageSmoothingQuality = "high";
 
-        tiles.forEach(t => {
+        let usedActualZoom = zoom;
+        let loadedCount = 0;
+
+        // 1. Малюємо базовий шар (супутник або карту)
+        baseTiles.forEach(t => {
             if (t) {
+                loadedCount++;
+                if (t.actualZoom < usedActualZoom) usedActualZoom = t.actualZoom;
                 let pxX = (t.x * 256) - (cTileX * 256 - halfSize);
                 let pxY = (t.y * 256) - (cTileY * 256 - halfSize);
-                satCtx.drawImage(t.img, pxX, pxY, 256, 256);
+                satCtx.drawImage(t.img, t.srcX, t.srcY, t.srcW, t.srcH, pxX, pxY, 256, 256);
             }
         });
 
+        // 2. Якщо ArcGIS Гібрид — накладаємо вулиці/дороги та підписи населених пунктів
+        roadTiles.forEach(t => {
+            if (t) {
+                let pxX = (t.x * 256) - (cTileX * 256 - halfSize);
+                let pxY = (t.y * 256) - (cTileY * 256 - halfSize);
+                satCtx.drawImage(t.img, t.srcX, t.srcY, t.srcW, t.srcH, pxX, pxY, 256, 256);
+            }
+        });
+        labelTiles.forEach(t => {
+            if (t) {
+                let pxX = (t.x * 256) - (cTileX * 256 - halfSize);
+                let pxY = (t.y * 256) - (cTileY * 256 - halfSize);
+                satCtx.drawImage(t.img, t.srcX, t.srcY, t.srcW, t.srcH, pxX, pxY, 256, 256);
+            }
+        });
+
+        // 3. Малюємо контур ділянки та точки
         let satPts = currentWgs84Points.map(p => {
             return {
                 x: (lon2tileX(p.lon, zoom) * 256) - (cTileX * 256 - halfSize),
@@ -786,7 +942,10 @@ document.getElementById('shareSatBtn').onclick = async function() {
         satCtx.fillStyle = "rgba(255, 0, 0, 0.22)"; satCtx.fill();
         satCtx.strokeStyle = "#ff0000"; satCtx.lineWidth = 4; satCtx.stroke();
 
-        // Точки та номери на супутнику (без тексту всередині контуру)
+        // Точки та номери
+        const polyCenterX = satPts.reduce((s, p) => s + p.x, 0) / satPts.length;
+        const polyCenterY = satPts.reduce((s, p) => s + p.y, 0) / satPts.length;
+
         satCtx.font = "bold 25px 'Courier New', monospace";
         satCtx.textAlign = "center"; satCtx.textBaseline = "middle";
 
@@ -794,15 +953,15 @@ document.getElementById('shareSatBtn').onclick = async function() {
             const s = 6;
             satCtx.fillStyle = "#ffffff"; satCtx.fillRect(pt.x - s, pt.y - s, s * 2, s * 2);
             satCtx.strokeStyle = "#ff0000"; satCtx.lineWidth = 2; satCtx.strokeRect(pt.x - s, pt.y - s, s * 2, s * 2);
-            const dx = pt.x - halfSize, dy = pt.y - halfSize;
+            const dx = pt.x - polyCenterX, dy = pt.y - polyCenterY;
             const dist = Math.max(Math.hypot(dx, dy), 1);
             const tx = pt.x + (dx/dist)*32, ty = pt.y + (dy/dist)*32;
             satCtx.lineWidth = 4; satCtx.strokeStyle = "#ffffff"; satCtx.strokeText(String(idx + 1), tx, ty);
             satCtx.fillStyle = "#000000"; satCtx.fillText(String(idx + 1), tx, ty);
         });
 
-        // Плашка знизу супутникового знімка з кадастровим номером
-        satCtx.fillStyle = "rgba(20, 33, 61, 0.82)";
+        // Плашка знизу з кадастровим номером
+        satCtx.fillStyle = "rgba(20, 33, 61, 0.85)";
         satCtx.fillRect(0, size - 70, size, 70);
         satCtx.font = "bold 30px 'Courier New', monospace";
         satCtx.fillStyle = "#ffffff";
@@ -810,12 +969,14 @@ document.getElementById('shareSatBtn').onclick = async function() {
 
         let b64 = satCanvas.toDataURL("image/jpeg", 0.92).split(',')[1];
         satContainer.style.display = "block";
-        statusEl.innerText = baseStatus + "\n✅ Супутник згенеровано!";
+        
+        let zoomNote = (usedActualZoom < zoom) ? ` (Overzoom з ${usedActualZoom} до ${zoom} рівня)` : ` (Рівень ${zoom})`;
+        statusEl.innerText = baseStatus + `\n✅ Карту згенеровано!${zoomNote}`;
 
-        shareNative(b64, "_Sat.jpg", "image/jpeg");
+        shareNative(b64, "_Map.jpg", "image/jpeg");
 
     } catch (e) {
-        statusEl.innerText = "❌ Помилка супутника: " + e.message;
+        statusEl.innerText = "❌ Помилка генерації карти: " + e.message;
     } finally {
         this.disabled = false;
     }
